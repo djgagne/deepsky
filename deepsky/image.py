@@ -20,10 +20,14 @@ def load_raw_images_date(date_in, path, image_diameter=480, row_start=75, max_ra
         print("Loading data from {0}".format(date.strftime("%Y-%m-%d")))
         image_tar_file = image_tar_files[0]
         tf = tarfile.open(image_tar_file)
-        out_path = join(path,date.strftime("%Y%m%d")) 
+        tar_names = pd.Series(tf.getnames())
+        tar_dates = pd.DatetimeIndex(tar_names.str.split(".").str[-2])
+        valid_files = tar_names.values[np.where(((tar_dates.minute == 0) | (tar_dates.minute == 30)) & (tar_dates.second == 0))]
+        out_path = join(path,date.strftime("%Y%m%d"))
         if not exists(out_path):
             os.mkdir(out_path)
-        tf.extractall(path=out_path)
+        for valid_file in valid_files:
+            tf.extract(valid_file, path=out_path)
         tf.close()
         image_files = pd.Series(sorted(glob(join(out_path, "*.jpg"))))
         image_dates = pd.DatetimeIndex(image_files.str.split(".").str.get(-2))
@@ -40,7 +44,7 @@ def load_raw_images_date(date_in, path, image_diameter=480, row_start=75, max_ra
         data = xr.DataArray(image_data, coords={"time": image_dates, "y": rows, "x": cols, "color":np.arange(3)},
                             dims=("time", "y", "x", "color"), attrs={"long_name":"TSI image", "units":""})
     else:
-        raise IOError(date + " not found")
+        raise IOError(date.strftime("%Y%m%d") + " not found")
     return data
 
 
