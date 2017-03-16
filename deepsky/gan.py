@@ -3,6 +3,7 @@ import numpy as np
 from keras.models import Sequential
 from keras.layers import Convolution2D, Deconvolution2D, Flatten, Dense, BatchNormalization
 from keras.layers import Activation, Reshape, LeakyReLU
+from os.path import join
 
 
 def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_width=4,
@@ -43,6 +44,40 @@ def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_wid
                               output_shape=(batch_size, output_size[0], output_size[1], output_size[2]),
                               subsample=(stride, stride),
                               border_mode="same"))
+    model.add(Activation("tanh"))
+    return model
+
+
+def encoder_model(input_size=100, filter_width=5, min_data_width=4,
+                    max_conv_filters=256, output_size=(32, 32, 1), stride=2):
+    """
+    Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
+    allow aspects of the structure of the generator to be tuned for optimal performance.
+
+    Args:
+        input_size (int): Number of nodes in the input layer.
+        filter_width (int): Width of each convolutional filter
+        min_data_width (int): Width of the first convolved layer after the input layer
+        max_conv_filters (int): Number of convolutional filters in the first convolutional layer
+        output_size (tuple of size 3): Dimensions of the output
+        stride (int): Number of pixels that the convolution filter shifts between operations.
+
+    Returns:
+        Keras convolutional neural network.
+    """
+    data_widths = [min_data_width]
+    conv_filters = [max_conv_filters]
+    while data_widths[-1] <= output_size[0] // stride:
+        data_widths.append(data_widths[-1] * stride)
+        conv_filters.append(conv_filters[-1] // stride)
+    model = Sequential()
+    for i in range(len(data_widths)-1, 0, -1):
+        model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
+                                subsample=(stride, stride), border_mode="same"))
+        model.add(BatchNormalization())
+        model.add(Activation("relu"))
+    model.add(Flatten())
+    model.add(Dense(input_size))
     model.add(Activation("tanh"))
     return model
 
@@ -100,8 +135,32 @@ def stack_gen_disc(generator, discriminator):
     return model
 
 
-def train_gan(train_data, generator, discriminator, batch_size, num_epochs,
-              gen_optimizer, disc_optimizer, gen_loss, disc_loss, metrics):
+def stack_gen_encoder(generator, encoder):
+    """
+    Combines generator and encoder layers together while freezing the weights of the generator layers.
+    This is used to train the encoder network to convert image data into a low-dimensional vector
+     representation.
+
+    Args:
+        generator: Decoder network
+        encoder: Encoder network
+    Returns:
+        Encoder layers attached to generator layers
+    """
+    model = Sequential()
+    for layer in generator.layers:
+        layer.trainable = False
+        model.add(layer)
+    for layer in encoder.layers:
+        layer.trainable = True
+        model.add(layer)
+    return model
+
+
+def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=100,
+              gen_optimizer="adam", disc_optimizer="adam",
+              gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
+              encoder=None, encoder_loss="mean_squared_error"):
     """
     Train generative adversarial network
 
@@ -125,6 +184,11 @@ def train_gan(train_data, generator, discriminator, batch_size, num_epochs,
     discriminator.compile(optimizer=disc_optimizer, loss=disc_loss, metrics=metrics)
     gen_on_disc = stack_gen_disc(generator, discriminator)
     gen_on_disc.compile(optimizer=gen_optimizer, loss=gen_loss, metrics=metrics)
+    gen_on_encoder = None
+    if encoder is not None:
+        encoder.compile(optimizer=gen_optimizer, loss=encoder_loss)
+        gen_on_encoder = stack_gen_encoder(generator, encoder)
+        gen_on_encoder.compile(optimizer=gen_optimizer, loss=encoder_loss)
     train_order = np.arange(train_data.shape[0])
     gen_loss_history = []
     disc_loss_history = []
@@ -141,6 +205,13 @@ def train_gan(train_data, generator, discriminator, batch_size, num_epochs,
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
             gen_loss_history.append(gen_on_disc.train_on_batch(gen_noise, gen_labels))
+            if encoder is not None:
+                gen_on_encoder.train_on_batch(gen_noise, gen_noise)
+        if epoch in num_epochs:
+            generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+            discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
+            if encoder is not None:
+                encoder.save(join(gan_path, "gan_encoder_{0:06d}.h5".format(gan_index, epoch)))
     return np.array(disc_loss_history), np.array(gen_loss_history)
 
 
