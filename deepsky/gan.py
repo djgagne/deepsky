@@ -28,11 +28,11 @@ def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_wid
     """
     data_widths = [min_data_width]
     conv_filters = [max_conv_filters]
-    while data_widths[-1] <= output_size[0] // stride:
+    while data_widths[-1] < output_size[0] // stride:
         data_widths.append(data_widths[-1] * stride)
         conv_filters.append(conv_filters[-1] // stride)
     model = Sequential()
-    model.add(Dense(input_shape=(input_size, ), output_dim=max_conv_filters * min_data_width * min_data_width))
+    model.add(Dense(input_shape=(input_size,), output_dim=max_conv_filters * min_data_width * min_data_width))
     model.add(BatchNormalization())
     model.add(Activation("relu"))
     model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
@@ -50,18 +50,18 @@ def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_wid
     return model
 
 
-def encoder_model(input_size=100, filter_width=5, min_data_width=4,
-                    max_conv_filters=256, output_size=(32, 32, 1), stride=2):
+def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
+                    max_conv_filters=256, output_size=100, stride=2):
     """
     Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
 
     Args:
-        input_size (int): Number of nodes in the input layer.
+        input_size (tuple of ints): Number of nodes in the input layer.
         filter_width (int): Width of each convolutional filter
         min_data_width (int): Width of the first convolved layer after the input layer
         max_conv_filters (int): Number of convolutional filters in the first convolutional layer
-        output_size (tuple of size 3): Dimensions of the output
+        output_size (int): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
 
     Returns:
@@ -69,17 +69,22 @@ def encoder_model(input_size=100, filter_width=5, min_data_width=4,
     """
     data_widths = [min_data_width]
     conv_filters = [max_conv_filters]
-    while data_widths[-1] <= output_size[0] // stride:
+    while data_widths[-1] <= input_size[0] // stride:
         data_widths.append(data_widths[-1] * stride)
         conv_filters.append(conv_filters[-1] // stride)
     model = Sequential()
     for i in range(len(data_widths)-1, 0, -1):
-        model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
-                                subsample=(stride, stride), border_mode="same"))
+        if i == len(data_widths) - 1:
+            model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
+                                    input_shape=input_size,
+                                    subsample=(stride, stride), border_mode="same"))
+        else:
+            model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
+                                    subsample=(stride, stride), border_mode="same"))
         model.add(BatchNormalization())
         model.add(Activation("relu"))
     model.add(Flatten())
-    model.add(Dense(input_size))
+    model.add(Dense(output_size))
     model.add(Activation("tanh"))
     return model
 
@@ -106,9 +111,13 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
         conv_filters.append(conv_filters[-1] * 2)
         curr_width //= stride
     model = Sequential()
-    for conv_count in conv_filters:
-        model.add(Convolution2D(conv_count, filter_width, filter_width, input_shape=input_size,
-                                subsample=(stride, stride), border_mode="same"))
+    for c, conv_count in enumerate(conv_filters):
+        if c == 0:
+            model.add(Convolution2D(conv_count, filter_width, filter_width, input_shape=input_size,
+                                    subsample=(stride, stride), border_mode="same"))
+        else:
+            model.add(Convolution2D(conv_count, filter_width, filter_width,
+                                    subsample=(stride, stride), border_mode="same"))
         model.add(BatchNormalization())
         model.add(LeakyReLU(alpha=leaky_relu_alpha))
     model.add(Flatten())
@@ -159,7 +168,7 @@ def stack_gen_encoder(generator, encoder):
     return model
 
 
-def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=100,
+def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
               gen_optimizer="adam", disc_optimizer="adam",
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
               encoder=None, encoder_loss="mean_squared_error"):
@@ -181,9 +190,13 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     Returns:
 
     """
+    metrics = list(metrics)
+    batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     generator.compile(optimizer=gen_optimizer, loss=gen_loss, metrics=metrics)
+    print(generator.summary())
     discriminator.compile(optimizer=disc_optimizer, loss=disc_loss, metrics=metrics)
+    print(discriminator.summary())
     gen_on_disc = stack_gen_disc(generator, discriminator)
     gen_on_disc.compile(optimizer=gen_optimizer, loss=gen_loss, metrics=metrics)
     gen_on_encoder = None
@@ -199,12 +212,12 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     batch_labels = np.zeros(batch_size)
     batch_labels[:batch_half] = 1
     gen_labels = np.ones(batch_size)
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
             disc_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
             gen_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
-            combo_data_batch[batch_half:] = generator.test_on_batch(disc_noise)[::2]
+            combo_data_batch[batch_half:] = generator.predict_on_batch(disc_noise)[::2]
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             print("{3} Train Discriminator Combo: {0} Epoch: {1} Batch: {2}".format(gan_index,
                                                                                     epoch,
@@ -233,7 +246,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
             gen_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
-            gen_data_epoch = unscale_data(generator.test_on_batch(gen_noise))
+            gen_data_epoch = unscale_data(generator.predict_on_batch(gen_noise))
             gen_da = xr.DataArray(gen_data_epoch, coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
                                                           "x": np.arange(gen_data_epoch.shape[2]),

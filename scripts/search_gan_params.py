@@ -3,11 +3,12 @@ import numpy as np
 import pandas as pd
 from multiprocessing import Pool
 import xarray as xr
+from glob import glob
 import itertools as it
-import keras.backend as K
+import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
 from os.path import join
-
+import traceback
 
 def main():
     data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
@@ -45,48 +46,63 @@ def main():
 
 
 def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_params, gan_path):
-    data = load_tsi_data(data_path, variable_name)
-    scaled_data = rescale_data(data)
-    with K.tf.device("/gpu:{0:d}".format(gpu_num)):
-        for i in gan_params.index:
-            gen = generator_model(batch_size=gan_params.loc[i, "batch_size"],
-                                  input_size=gan_params.loc[i, "generator_input_size"],
-                                  filter_width=gan_params.loc[i, "filter_width"],
-                                  min_data_width=gan_params.loc[i, "min_data_width"],
-                                  max_conv_filters=gan_params.loc[i, "max_conv_filters"],
-                                  output_size=scaled_data.shape[1:],
-                                  stride=2)
-            disc = discriminator_model(input_size=scaled_data.shape[1:],
-                                       stride=2,
-                                       filter_width=gan_params.loc[i, "filter_width"],
-                                       min_conv_filters=gan_params.loc[i, "min_conv_filters"],
-                                       min_data_width=gan_params.loc[i, "min_data_width"],
-                                       leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
-            enc = encoder_model(input_size=scaled_data.shape[1:],
-                                filter_width=gan_params.loc[i, "filter_width"],
-                                min_data_width=gan_params.loc[i, "min_data_width"],
-                                max_conv_filters=gan_params.loc[i, "max_conv_filters"],
-                                output_size=gan_params.loc[i, "generator_input_size"])
-            optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
-                             beta_1=gan_params.loc[i, "beta_one"])
-            history = train_gan(scaled_data, gen, disc, gan_path, i,
-                                batch_size=gan_params.loc[i, "batch_size"],
-                                num_epochs=num_epochs,
-                                gen_optimizer=optimizer, disc_optimizer=optimizer,
-                                encoder=enc)
-            history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Step")
+    try:
+        print("Loading data {0}".format(gpu_num))
+        data = load_tsi_data(data_path, variable_name)
+        print("Rescaling data {0}".format(gpu_num))
+        scaled_data = rescale_data(data)
+        with K.tf.device("/gpu:{0:d}".format(gpu_num)):
+            K.set_session(K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True, 
+                                                               gpu_options=K.tf.GPUOptions(allow_growth=True),
+                                                               log_device_placement=False)))
+            for i in gan_params.index.values:
+                print("Starting combo {0:d}".format(i))
+                print(gan_params.loc[i])
+                batch_size = int(gan_params.loc[i, "batch_size"])
+                batch_diff = scaled_data.shape[0] % batch_size
+                gen = generator_model(batch_size=int(gan_params.loc[i, "batch_size"]),
+                                    input_size=int(gan_params.loc[i, "generator_input_size"]),
+                                    filter_width=int(gan_params.loc[i, "filter_width"]),
+                                    min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                    max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                    output_size=scaled_data.shape[1:],
+                                    stride=2)
+                disc = discriminator_model(input_size=scaled_data.shape[1:],
+                                        stride=2,
+                                        filter_width=int(gan_params.loc[i, "filter_width"]),
+                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                        min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                        leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
+                enc = encoder_model(input_size=scaled_data.shape[1:],
+                                    filter_width=int(gan_params.loc[i, "filter_width"]),
+                                    min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                    max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                    output_size=int(gan_params.loc[i, "generator_input_size"]))
+                optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
+                                beta_1=gan_params.loc[i, "beta_one"])
+                history = train_gan(scaled_data[:-batch_diff], gen, disc, gan_path, i,
+                                    batch_size=int(gan_params.loc[i, "batch_size"]),
+                                    num_epochs=num_epochs,
+                                    gen_optimizer=optimizer, disc_optimizer=optimizer,
+                                    encoder=enc)
+                history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Step")
+    except Exception as e:
+        print(traceback.format_exc())
+        raise e
     return
 
 
 def load_tsi_data(data_path, variable_name, width=32, r_patch=(100, 100, 150, 150),
                   c_patch=(280, 120, 280, 120)):
-    ds = xr.open_mfdataset(data_path + "*.nc")
     data_patches = []
-    for i in range(len(r_patch)):
-        data_patches.append(ds[variable_name][:,
-                                              r_patch[i]:r_patch[i] + width,
-                                              c_patch[i]:c_patch[i] + width].values)
-    ds.close()
+    data_files = sorted(glob(join(data_path, "*.nc")))
+    for data_file in data_files:
+        ds = xr.open_dataset(data_file)
+        for i in range(len(r_patch)):
+            data_patches.append(ds[variable_name][:,
+                                                  r_patch[i]:r_patch[i] + width,
+                                                  c_patch[i]:c_patch[i] + width].values)
+        ds.close()
     data = np.vstack(data_patches)
     return data
 
