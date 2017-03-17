@@ -29,7 +29,8 @@ def convert_tsi_jpeg_to_nc(date, in_path, out_path):
         print("Saving to netCDF {0}".format(date.strftime("%Y-%m-%d")))
         image_data.to_dataset(name="tsi_image").to_netcdf(join(out_path,
                                                                "tsi_sgp_{0}.nc".format(date.strftime("%Y%m%d"))),
-                                                          encoding={"tsi_image": {"zlib":True}})
+                                                          encoding={"tsi_image": {"zlib":True, "complevel": 1,
+                                                                                  }})
         clear_image_files(date, in_path)
     except Exception as e:
         print(traceback.format_exc())
