@@ -15,14 +15,14 @@ def main():
     variable_name = "tsi_image"
     gan_path = "/scratch/dgagne/arm_gan/"
     gan_params = dict(generator_input_size=[100],
-                      filter_width=[3, 5],
-                      min_data_width=[2, 4],
-                      max_conv_filters=[256, 512, 1024],
-                      min_conv_filters=[16, 32, 64],
-                      leaky_relu_alpha=[0.1, 0.2],
+                      filter_width=[5],
+                      min_data_width=[4],
+                      max_conv_filters=[256, 512],
+                      min_conv_filters=[32, 64],
+                      leaky_relu_alpha=[0.2],
                       batch_size=[256],
-                      learning_rate=[0.0001, 0.00001],
-                      beta_one=[0.5])
+                      learning_rate=[0.0002, 0.00002],
+                      beta_one=[0.2])
     num_epochs = [1, 10, 20]
     num_gpus = 8
     total_combinations = 1
@@ -60,13 +60,12 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
                 print(gan_params.loc[i])
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
-                gen = generator_model(batch_size=int(gan_params.loc[i, "batch_size"]),
-                                    input_size=int(gan_params.loc[i, "generator_input_size"]),
-                                    filter_width=int(gan_params.loc[i, "filter_width"]),
-                                    min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                    max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
-                                    output_size=scaled_data.shape[1:],
-                                    stride=2)
+                gen = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
+                                      filter_width=int(gan_params.loc[i, "filter_width"]),
+                                      min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                      max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                      output_size=scaled_data.shape[1:],
+                                      stride=2)
                 disc = discriminator_model(input_size=scaled_data.shape[1:],
                                         stride=2,
                                         filter_width=int(gan_params.loc[i, "filter_width"]),

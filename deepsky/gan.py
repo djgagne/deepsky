@@ -2,20 +2,19 @@ from __future__ import division
 import numpy as np
 import pandas as pd
 from keras.models import Sequential
-from keras.layers import Convolution2D, Deconvolution2D, Flatten, Dense, BatchNormalization
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, BatchNormalization
 from keras.layers import Activation, Reshape, LeakyReLU
 import xarray as xr
 from os.path import join
 
 
-def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_width=4,
+def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     max_conv_filters=256, output_size=(32, 32, 1), stride=2):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
 
     Args:
-        batch_size (int): Number of examples in each batch. The Deconvoluational layers require a fixed batch size
         input_size (int): Number of nodes in the input layer.
         filter_width (int): Width of each convolutional filter
         min_data_width (int): Width of the first convolved layer after the input layer
@@ -34,18 +33,13 @@ def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_wid
     model = Sequential()
     model.add(Dense(input_shape=(input_size,), output_dim=max_conv_filters * min_data_width * min_data_width))
     model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
-    model.add(BatchNormalization())
-    model.add(Activation("relu"))
     for i in range(1, len(data_widths)):
-        model.add(Deconvolution2D(conv_filters[i], filter_width, filter_width,
-                                  output_shape=(batch_size, data_widths[i], data_widths[i], conv_filters[i]),
-                                  subsample=(stride, stride), border_mode="same"))
-        model.add(BatchNormalization())
+        model.add(Conv2DTranspose(conv_filters[i], filter_width,
+                                  strides=(stride, stride), padding="same"))
         model.add(Activation("relu"))
-    model.add(Deconvolution2D(output_size[-1], filter_width, filter_width,
-                              output_shape=(batch_size, output_size[0], output_size[1], output_size[2]),
-                              subsample=(stride, stride),
-                              border_mode="same"))
+    model.add(Conv2DTranspose(output_size[-1], filter_width,
+                              strides=(stride, stride),
+                              padding="same"))
     model.add(Activation("tanh"))
     return model
 
@@ -75,13 +69,12 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     model = Sequential()
     for i in range(len(data_widths)-1, 0, -1):
         if i == len(data_widths) - 1:
-            model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
+            model.add(Conv2D(conv_filters[i], filter_width,
                                     input_shape=input_size,
-                                    subsample=(stride, stride), border_mode="same"))
+                                    strides=(stride, stride), padding="same"))
         else:
-            model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
-                                    subsample=(stride, stride), border_mode="same"))
-            model.add(BatchNormalization())
+            model.add(Conv2D(conv_filters[i], filter_width,
+                                    strides=(stride, stride), padding="same"))
         model.add(Activation("relu"))
     model.add(Flatten())
     model.add(Dense(output_size))
@@ -113,12 +106,11 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
     model = Sequential()
     for c, conv_count in enumerate(conv_filters):
         if c == 0:
-            model.add(Convolution2D(conv_count, filter_width, filter_width, input_shape=input_size,
-                                    subsample=(stride, stride), border_mode="same"))
+            model.add(Conv2D(conv_count, filter_width, input_shape=input_size,
+                             strides=(stride, stride), padding="same"))
         else:
-            model.add(Convolution2D(conv_count, filter_width, filter_width,
-                                    subsample=(stride, stride), border_mode="same"))
-            model.add(BatchNormalization())
+            model.add(Conv2D(conv_count, filter_width,
+                             strides=(stride, stride), padding="same"))
         model.add(LeakyReLU(alpha=leaky_relu_alpha))
     model.add(Flatten())
     model.add(Dense(1))
@@ -209,9 +201,9 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     disc_loss_history = []
     current_epoch = []
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
-    batch_labels = np.zeros(batch_size)
+    batch_labels = np.zeros(batch_size, dtype=int)
     batch_labels[:batch_half] = 1
-    gen_labels = np.ones(batch_size)
+    gen_labels = np.ones(batch_size, dtype=int)
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
