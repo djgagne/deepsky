@@ -14,16 +14,16 @@ def main():
     data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
     variable_name = "tsi_image"
     gan_path = "/scratch/dgagne/arm_gan/"
-    gan_params = dict(generator_input_size=[10, 100],
-                      filter_width=[5],
+    gan_params = dict(generator_input_size=[100],
+                      filter_width=[3, 5],
                       min_data_width=[2, 4],
                       max_conv_filters=[256, 512, 1024],
-                      min_conv_filters=[8, 16, 32],
-                      leaky_relu_alpha=[0, 0.1, 0.2],
-                      batch_size=[128],
-                      learning_rate=[0.001, 0.0001, 0.00001],
-                      beta_one=[0.5, 0.9])
-    num_epochs = [10, 100, 500, 1000]
+                      min_conv_filters=[16, 32, 64],
+                      leaky_relu_alpha=[0.1, 0.2],
+                      batch_size=[256],
+                      learning_rate=[0.0001, 0.00001],
+                      beta_one=[0.5])
+    num_epochs = [1, 10, 20]
     num_gpus = 8
     total_combinations = 1
     for param_name, values in gan_params.items():
@@ -82,6 +82,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
                                 beta_1=gan_params.loc[i, "beta_one"])
                 history = train_gan(scaled_data[:-batch_diff], gen, disc, gan_path, i,
                                     batch_size=int(gan_params.loc[i, "batch_size"]),
+                                    gen_input_size=int(gan_params.loc[i, "generator_input_size"]),
                                     num_epochs=num_epochs,
                                     gen_optimizer=optimizer, disc_optimizer=optimizer,
                                     encoder=enc)

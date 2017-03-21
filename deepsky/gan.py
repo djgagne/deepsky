@@ -33,9 +33,9 @@ def generator_model(batch_size=128, input_size=100, filter_width=5, min_data_wid
         conv_filters.append(conv_filters[-1] // stride)
     model = Sequential()
     model.add(Dense(input_shape=(input_size,), output_dim=max_conv_filters * min_data_width * min_data_width))
+    model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
     model.add(BatchNormalization())
     model.add(Activation("relu"))
-    model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
     for i in range(1, len(data_widths)):
         model.add(Deconvolution2D(conv_filters[i], filter_width, filter_width,
                                   output_shape=(batch_size, data_widths[i], data_widths[i], conv_filters[i]),
@@ -81,7 +81,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         else:
             model.add(Convolution2D(conv_filters[i], filter_width, filter_width,
                                     subsample=(stride, stride), border_mode="same"))
-        model.add(BatchNormalization())
+            model.add(BatchNormalization())
         model.add(Activation("relu"))
     model.add(Flatten())
     model.add(Dense(output_size))
@@ -118,7 +118,7 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
         else:
             model.add(Convolution2D(conv_count, filter_width, filter_width,
                                     subsample=(stride, stride), border_mode="same"))
-        model.add(BatchNormalization())
+            model.add(BatchNormalization())
         model.add(LeakyReLU(alpha=leaky_relu_alpha))
     model.add(Flatten())
     model.add(Dense(1))
@@ -169,7 +169,7 @@ def stack_gen_encoder(generator, encoder):
 
 
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
-              gen_optimizer="adam", disc_optimizer="adam",
+              gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
               encoder=None, encoder_loss="mean_squared_error"):
     """
@@ -215,8 +215,8 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            disc_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
-            gen_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
+            disc_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
+            gen_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
             combo_data_batch[batch_half:] = generator.predict_on_batch(disc_noise)[::2]
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             print("{3} Train Discriminator Combo: {0} Epoch: {1} Batch: {2}".format(gan_index,
@@ -229,10 +229,10 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
                                                                                 b,
                                                                                 pd.Timestamp("now")))
             gen_loss_history.append(gen_on_disc.train_on_batch(gen_noise, gen_labels))
-            print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.3f}, Accuracy: {4:0.3f}".format(gan_index,
+            print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index,
                                                                                                     epoch, b,
                                                                                                     *disc_loss_history[-1]))
-            print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.3f}, Accuracy: {4:0.3f}".format(gan_index,
+            print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index,
                                                                                                    epoch, b,
                                                                                                    *gen_loss_history[-1]))
 
@@ -245,7 +245,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
                                                                  pd.Timestamp("now")))
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
-            gen_noise = np.random.uniform(-1, 1, size=(batch_size, 100))
+            gen_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
             gen_data_epoch = unscale_data(generator.predict_on_batch(gen_noise))
             gen_da = xr.DataArray(gen_data_epoch, coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
@@ -253,12 +253,12 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
                                                           "color": np.arange(3)},
                                   dims=("p", "y", "x", "color"),
                                   attrs={"long_name": "Synthetic image", "units": ""})
-            gen_da.to_dataset(name="gen_tsi_patch").to_netcdf(join(gan_path,
-                                                                   "gan_gen_patches_{0:06d}_epoch_{1:04d}.nc"),
-                                                              encoding={"gen_patch": {"zlib": True,
-                                                                                      "complevel": 1}})
+            gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
+                                                               "gan_gen_patches_{0:06d}_epoch_{1:04d}.nc".format(gan_index, epoch)),
+                                                          encoding={"gen_patch": {"zlib": True,
+                                                                                  "complevel": 1}})
             if encoder is not None:
-                encoder.save(join(gan_path, "gan_encoder_{0:06d}.h5".format(gan_index, epoch)))
+                encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
                 ["Gen Loss"] + ["Gen " + m for m in metrics]
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history]),
