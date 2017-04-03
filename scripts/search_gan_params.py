@@ -9,19 +9,28 @@ import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
 from os.path import join
 import traceback
+import argparse
+
 
 def main():
-    data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
-    variable_name = "tsi_image"
-    gan_path = "/scratch/dgagne/arm_gan/"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", "--tsi", action="store_true", help="Load TSI data, otherwise load storm data")
+    args = parser.parse_args()
+    if args.tsi:
+        data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
+        variable_name = "tsi_image"
+        gan_path = "/scratch/dgagne/arm_gan/"
+    else:
+        data_path = "/scratch/dgagne/ncar_ens_storm_patches/"
+        variable_name = []
+        gan_path = "/scratch/dgagne/storm_gan/"
     gan_params = dict(generator_input_size=[100],
                       filter_width=[5],
-                      min_data_width=[4],
-                      max_conv_filters=[256, 512],
-                      min_conv_filters=[32, 64],
+                      min_data_width=[2, 4],
+                      max_conv_filters=[256, 512, 1024],
                       leaky_relu_alpha=[0.2],
                       batch_size=[256],
-                      learning_rate=[0.0002, 0.00002],
+                      learning_rate=[0.0002],
                       beta_one=[0.2])
     num_epochs = [1, 10, 20]
     num_gpus = 8
@@ -69,7 +78,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
                 disc = discriminator_model(input_size=scaled_data.shape[1:],
                                         stride=2,
                                         filter_width=int(gan_params.loc[i, "filter_width"]),
-                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                        max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
                                         min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                         leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
                 enc = encoder_model(input_size=scaled_data.shape[1:],
@@ -105,6 +114,20 @@ def load_tsi_data(data_path, variable_name, width=32, r_patch=(100, 100, 150, 15
         ds.close()
     data = np.vstack(data_patches)
     return data
+
+
+def load_storm_patch_data(data_path, variable_names):
+    data_patches = []
+    data_files = sorted(glob(join(data_path, "*.nc")))
+    for data_file in data_files:
+        ds = xr.open_dataset(data_file)
+        patch_arr = []
+        for variable in variable_names:
+            patch_arr.append(ds[variable].values)
+        data_patches.append(np.stack(patch_arr, axis=-1))
+    data = np.stack(data_patches, axis=0)
+    return data
+
 
 if __name__ == "__main__":
     main()

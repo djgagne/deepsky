@@ -83,7 +83,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
 
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
-                        min_conv_filters=16, min_data_width=4, leaky_relu_alpha=0.2):
+                        max_conv_filters=16, min_data_width=4, leaky_relu_alpha=0.2):
     """
     Creates a discriminator model for a generative adversarial network.
 
@@ -91,18 +91,19 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
         input_size (tuple of size 3): Dimensions of input data
         stride (int): Number of pixels the convolution filter is shifted between operations
         filter_width (int): Width of convolution filters
-        min_conv_filters (int): Number of convolution filters in the first layer. Doubles in each subsequent layer
+        max_conv_filters (int): Number of convolution filters in the last layer. Halves in each previous layer
         min_data_width (int): Smallest width of input data after convolution downsampling before flattening
         leaky_relu_alpha (float): scaling coefficient for negative values in Leaky Rectified Linear Unit
 
     Returns:
         Keras generator model
     """
-    curr_width = input_size[0]
-    conv_filters = [min_conv_filters]
-    while curr_width > min_data_width:
-        conv_filters.append(conv_filters[-1] * 2)
-        curr_width //= stride
+    data_widths = [min_data_width]
+    conv_filters = [max_conv_filters]
+    while data_widths[-1] <= input_size[0] // stride:
+        data_widths.append(data_widths[-1] * stride)
+        conv_filters.append(conv_filters[-1] // stride)
+    conv_filters = conv_filters[::-1]
     model = Sequential()
     for c, conv_count in enumerate(conv_filters):
         if c == 0:
@@ -263,6 +264,21 @@ def rescale_data(data):
     return scaled_data
 
 
+def rescale_multivariate_data(data):
+    scaled_data = np.zeros(data.shape)
+    for i in range(data.shape[-1]):
+        scaled_data[:, :, :, i] = rescale_data(data[:, :, :, i])
+    return scaled_data
+
+
 def unscale_data(data, min_val=0, max_val=255):
     unscaled_data = np.round((data + 1) / 2 * (max_val - min_val) + min_val)
     return unscaled_data.astype("uint8")
+
+
+def unscale_multivariate_data(data, min_vals, max_vals):
+    unscaled_data = np.zeros(data.shape)
+    for i in range(data.shape[-1]):
+        unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
+                                                 min_vals[i],
+                                                 max_vals[i])
