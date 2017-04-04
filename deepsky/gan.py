@@ -164,7 +164,8 @@ def stack_gen_encoder(generator, encoder):
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
-              encoder=None, encoder_loss="mean_squared_error"):
+              encoder=None, encoder_loss="mean_squared_error", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+              out_dtype="float32"):
     """
     Train generative adversarial network
 
@@ -179,7 +180,10 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
         gen_loss:
         disc_loss:
         metrics:
-
+        encoder:
+        encoder_loss:
+        min_vals:
+        max_vals:
     Returns:
 
     """
@@ -200,6 +204,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     train_order = np.arange(train_data.shape[0])
     gen_loss_history = []
     disc_loss_history = []
+    encoder_loss_history = []
     current_epoch = []
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     batch_labels = np.zeros(batch_size, dtype=int)
@@ -231,7 +236,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
 
             current_epoch.append((epoch,b))
             if encoder is not None:
-                gen_on_encoder.train_on_batch(gen_noise, gen_noise)
+                encoder_loss_history.append(gen_on_encoder.train_on_batch(gen_noise, gen_noise))
         if epoch in num_epochs:
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
                                                                  epoch,
@@ -239,13 +244,13 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
             gen_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
-            gen_data_epoch = unscale_data(generator.predict_on_batch(gen_noise))
-            gen_da = xr.DataArray(gen_data_epoch, coords={"p": np.arange(gen_data_epoch.shape[0]),
+            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), min_vals, max_vals)
+            gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
                                                           "x": np.arange(gen_data_epoch.shape[2]),
-                                                          "color": np.arange(3)},
-                                  dims=("p", "y", "x", "color"),
-                                  attrs={"long_name": "Synthetic image", "units": ""})
+                                                          "channel": np.arange(train_data.shape[-1])},
+                                  dims=("p", "y", "x", "channel"),
+                                  attrs={"long_name": "Synthetic data", "units": ""})
             gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
                                                                "gan_gen_patches_{0:06d}_epoch_{1:04d}.nc".format(gan_index, epoch)),
                                                           encoding={"gen_patch": {"zlib": True,
@@ -253,8 +258,8 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
             if encoder is not None:
                 encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
-                ["Gen Loss"] + ["Gen " + m for m in metrics]
-    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history]),
+                ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Encoder Loss"]
+    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history, encoder_loss_history]),
                            columns=hist_cols)
     return history
 
@@ -272,8 +277,8 @@ def rescale_multivariate_data(data):
 
 
 def unscale_data(data, min_val=0, max_val=255):
-    unscaled_data = np.round((data + 1) / 2 * (max_val - min_val) + min_val)
-    return unscaled_data.astype("uint8")
+    unscaled_data = (data + 1) / 2 * (max_val - min_val) + min_val
+    return unscaled_data
 
 
 def unscale_multivariate_data(data, min_vals, max_vals):
@@ -282,3 +287,4 @@ def unscale_multivariate_data(data, min_vals, max_vals):
         unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
                                                  min_vals[i],
                                                  max_vals[i])
+    return unscaled_data

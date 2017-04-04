@@ -1,4 +1,4 @@
-from deepsky.gan import generator_model, discriminator_model, train_gan, rescale_data, encoder_model
+from deepsky.gan import generator_model, discriminator_model, train_gan, encoder_model, rescale_multivariate_data
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -18,21 +18,27 @@ def main():
     args = parser.parse_args()
     if args.tsi:
         data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
-        variable_name = "tsi_image"
+        variable_names = ["tsi_image"]
         gan_path = "/scratch/dgagne/arm_gan/"
+        out_dtype = "uint8"
     else:
         data_path = "/scratch/dgagne/ncar_ens_storm_patches/"
-        variable_name = []
+        variable_names = ["composite_reflectivity_entire_atmosphere_prev",
+                          "temperature_2_m_above_ground_prev",
+                          "dew_point_temperature_2_m_above_ground_prev",
+                          "u-component_of_wind_10_m_above_ground_prev",
+                          "v-component_of_wind_10_m_above_ground_prev"]
         gan_path = "/scratch/dgagne/storm_gan/"
-    gan_params = dict(generator_input_size=[100],
+        out_dtype = "float32"
+    gan_params = dict(generator_input_size=[10, 100],
                       filter_width=[5],
                       min_data_width=[2, 4],
                       max_conv_filters=[256, 512, 1024],
                       leaky_relu_alpha=[0.2],
                       batch_size=[256],
-                      learning_rate=[0.0002],
+                      learning_rate=[0.0001],
                       beta_one=[0.2])
-    num_epochs = [1, 10, 20]
+    num_epochs = [1, 5, 10]
     num_gpus = 8
     total_combinations = 1
     for param_name, values in gan_params.items():
@@ -45,21 +51,23 @@ def main():
     pool = Pool(num_gpus)
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
     for gpu_num in range(num_gpus):
-        pool.apply_async(evaluate_gan_config, (gpu_num, data_path, variable_name,
+        pool.apply_async(evaluate_gan_config, (gpu_num, data_path, variable_names,
                                                num_epochs,
-                                               gan_param_combos.loc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
-                                               gan_path))
+                                               gan_param_combos.iloc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
+                                               gan_path, out_dtype))
     pool.close()
     pool.join()
     return
 
 
-def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_params, gan_path):
+def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_params, gan_path, out_dtype):
     try:
         print("Loading data {0}".format(gpu_num))
         data = load_tsi_data(data_path, variable_name)
+        max_vals = data.max(axis=0).max(axis=0).max(axis=0)
+        min_vals = data.min(axis=0).min(axis=0).min(axis=0)
         print("Rescaling data {0}".format(gpu_num))
-        scaled_data = rescale_data(data)
+        scaled_data = rescale_multivariate_data(data)
         with K.tf.device("/gpu:{0:d}".format(gpu_num)):
             K.set_session(K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True, 
                                                                gpu_options=K.tf.GPUOptions(allow_growth=True),
@@ -93,7 +101,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
                                     gen_input_size=int(gan_params.loc[i, "generator_input_size"]),
                                     num_epochs=num_epochs,
                                     gen_optimizer=optimizer, disc_optimizer=optimizer,
-                                    encoder=enc)
+                                    encoder=enc, max_vals=max_vals, min_vals=min_vals, out_dtype=out_dtype)
                 history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Step")
     except Exception as e:
         print(traceback.format_exc())
@@ -101,10 +109,11 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
     return
 
 
-def load_tsi_data(data_path, variable_name, width=32, r_patch=(100, 100, 150, 150),
+def load_tsi_data(data_path, variable_names, width=32, r_patch=(100, 100, 150, 150),
                   c_patch=(280, 120, 280, 120)):
     data_patches = []
     data_files = sorted(glob(join(data_path, "*.nc")))
+    variable_name = variable_names[0]
     for data_file in data_files:
         ds = xr.open_dataset(data_file)
         for i in range(len(r_patch)):
