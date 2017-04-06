@@ -164,7 +164,7 @@ def stack_gen_encoder(generator, encoder):
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
-              encoder=None, encoder_loss="mean_squared_error", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+              encoder=None, encoder_loss="mae", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
               out_dtype="float32"):
     """
     Train generative adversarial network
@@ -205,6 +205,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     gen_loss_history = []
     disc_loss_history = []
     encoder_loss_history = []
+    time_history = []
     current_epoch = []
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     batch_labels = np.zeros(batch_size, dtype=int)
@@ -237,6 +238,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
             current_epoch.append((epoch,b))
             if encoder is not None:
                 encoder_loss_history.append(gen_on_encoder.train_on_batch(gen_noise, gen_noise))
+            time_history.append(pd.Timestamp("now"))
         if epoch in num_epochs:
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
                                                                  epoch,
@@ -259,8 +261,11 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
                 encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
                 ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Encoder Loss"]
-    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history, encoder_loss_history]),
-                           columns=hist_cols)
+    encoder_history = np.array(encoder_loss_history)
+    encoder_history = encoder_history.reshape(-1, 1)
+    time_history = pd.DatetimeIndex(time_history)
+    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history, encoder_history]),
+                           index=time_history, columns=hist_cols)
     return history
 
 

@@ -60,10 +60,13 @@ def main():
     return
 
 
-def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_params, gan_path, out_dtype):
+def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_params, gan_path, out_dtype):
     try:
         print("Loading data {0}".format(gpu_num))
-        data = load_tsi_data(data_path, variable_name)
+        if "tsi" in data_path:
+            data = load_tsi_data(data_path, variable_names)
+        else:
+            data = load_storm_patch_data(data_path, variable_names)
         max_vals = data.max(axis=0).max(axis=0).max(axis=0)
         min_vals = data.min(axis=0).min(axis=0).min(axis=0)
         print("Rescaling data {0}".format(gpu_num))
@@ -102,7 +105,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_name, num_epochs, gan_param
                                     num_epochs=num_epochs,
                                     gen_optimizer=optimizer, disc_optimizer=optimizer,
                                     encoder=enc, max_vals=max_vals, min_vals=min_vals, out_dtype=out_dtype)
-                history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Step")
+                history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Time")
     except Exception as e:
         print(traceback.format_exc())
         raise e
@@ -134,7 +137,8 @@ def load_storm_patch_data(data_path, variable_names):
         for variable in variable_names:
             patch_arr.append(ds[variable].values)
         data_patches.append(np.stack(patch_arr, axis=-1))
-    data = np.stack(data_patches, axis=0)
+        print(data_patches[-1].shape)
+    data = np.vstack(data_patches)
     return data
 
 
