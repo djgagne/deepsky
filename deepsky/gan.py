@@ -9,7 +9,7 @@ from os.path import join
 
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
-                    max_conv_filters=256, output_size=(32, 32, 1), stride=2):
+                    min_conv_filters=64, output_size=(32, 32, 1), stride=2):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -18,23 +18,23 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
         input_size (int): Number of nodes in the input layer.
         filter_width (int): Width of each convolutional filter
         min_data_width (int): Width of the first convolved layer after the input layer
-        max_conv_filters (int): Number of convolutional filters in the first convolutional layer
+        min_conv_filters (int): Number of convolutional filters in the last convolutional layer
         output_size (tuple of size 3): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
 
     Returns:
         Keras convolutional neural network.
     """
-    data_widths = [min_data_width]
-    conv_filters = [max_conv_filters]
-    while data_widths[-1] < output_size[0] // stride:
-        data_widths.append(data_widths[-1] * stride)
-        conv_filters.append(conv_filters[-1] // stride)
+    num_layers = int(np.log2(output_size[0]) - np.log2(min_data_width))
+    max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
+    curr_conv_filters = max_conv_filters
     model = Sequential()
-    model.add(Dense(input_shape=(input_size,), output_dim=max_conv_filters * min_data_width * min_data_width))
+    model.add(Dense(input_shape=(input_size,), units=max_conv_filters * min_data_width * min_data_width))
     model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
-    for i in range(1, len(data_widths)):
-        model.add(Conv2DTranspose(conv_filters[i], filter_width,
+    model.add(Activation("relu"))
+    for i in range(1, num_layers):
+        curr_conv_filters //= 2
+        model.add(Conv2DTranspose(curr_conv_filters, filter_width,
                                   strides=(stride, stride), padding="same"))
         model.add(Activation("relu"))
     model.add(Conv2DTranspose(output_size[-1], filter_width,
@@ -45,7 +45,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
 
 
 def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
-                    max_conv_filters=256, output_size=100, stride=2):
+                    min_conv_filters=64, output_size=100, stride=2):
     """
     Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -53,29 +53,27 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     Args:
         input_size (tuple of ints): Number of nodes in the input layer.
         filter_width (int): Width of each convolutional filter
-        min_data_width (int): Width of the first convolved layer after the input layer
-        max_conv_filters (int): Number of convolutional filters in the first convolutional layer
+        min_data_width (int): Width of the last convolved layer
+        min_conv_filters (int): Number of convolutional filters in the first convolutional layer
         output_size (int): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
 
     Returns:
         Keras convolutional neural network.
     """
-    data_widths = [min_data_width]
-    conv_filters = [max_conv_filters]
-    while data_widths[-1] <= input_size[0] // stride:
-        data_widths.append(data_widths[-1] * stride)
-        conv_filters.append(conv_filters[-1] // stride)
+    num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
+    curr_conv_filters = min_conv_filters
     model = Sequential()
-    for i in range(len(data_widths)-1, 0, -1):
-        if i == len(data_widths) - 1:
-            model.add(Conv2D(conv_filters[i], filter_width,
+    for c in range(num_layers):
+        if c == 0:
+            model.add(Conv2D(curr_conv_filters, filter_width,
                                     input_shape=input_size,
                                     strides=(stride, stride), padding="same"))
         else:
-            model.add(Conv2D(conv_filters[i], filter_width,
+            model.add(Conv2D(curr_conv_filters, filter_width,
                                     strides=(stride, stride), padding="same"))
         model.add(Activation("relu"))
+        curr_conv_filters *= 2
     model.add(Flatten())
     model.add(Dense(output_size))
     model.add(Activation("tanh"))
@@ -83,7 +81,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
 
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
-                        max_conv_filters=16, min_data_width=4, leaky_relu_alpha=0.2):
+                        min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2):
     """
     Creates a discriminator model for a generative adversarial network.
 
@@ -91,28 +89,25 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
         input_size (tuple of size 3): Dimensions of input data
         stride (int): Number of pixels the convolution filter is shifted between operations
         filter_width (int): Width of convolution filters
-        max_conv_filters (int): Number of convolution filters in the last layer. Halves in each previous layer
+        min_conv_filters (int): Number of convolution filters in the first layer. Doubles in each subsequent layer
         min_data_width (int): Smallest width of input data after convolution downsampling before flattening
         leaky_relu_alpha (float): scaling coefficient for negative values in Leaky Rectified Linear Unit
 
     Returns:
         Keras generator model
     """
-    data_widths = [min_data_width]
-    conv_filters = [max_conv_filters]
-    while data_widths[-1] <= input_size[0] // stride:
-        data_widths.append(data_widths[-1] * stride)
-        conv_filters.append(conv_filters[-1] // stride)
-    conv_filters = conv_filters[::-1]
+    num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
+    curr_conv_filters = min_conv_filters
     model = Sequential()
-    for c, conv_count in enumerate(conv_filters):
+    for c in range(num_layers):
         if c == 0:
-            model.add(Conv2D(conv_count, filter_width, input_shape=input_size,
+            model.add(Conv2D(curr_conv_filters, filter_width, input_shape=input_size,
                              strides=(stride, stride), padding="same"))
         else:
-            model.add(Conv2D(conv_count, filter_width,
+            model.add(Conv2D(curr_conv_filters, filter_width,
                              strides=(stride, stride), padding="same"))
         model.add(LeakyReLU(alpha=leaky_relu_alpha))
+        curr_conv_filters *= 2
     model.add(Flatten())
     model.add(Dense(1))
     model.add(Activation("sigmoid"))
@@ -164,7 +159,7 @@ def stack_gen_encoder(generator, encoder):
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
-              encoder=None, encoder_loss="mae", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+              encoder=None, encoder_loss="mse", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
               out_dtype="float32"):
     """
     Train generative adversarial network
