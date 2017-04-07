@@ -33,7 +33,7 @@ def main():
     gan_params = dict(generator_input_size=[10, 100],
                       filter_width=[5],
                       min_data_width=[2, 4],
-                      max_conv_filters=[256, 512, 1024],
+                      min_conv_filters=[64, 128, 256],
                       leaky_relu_alpha=[0.2],
                       batch_size=[256],
                       learning_rate=[0.0001],
@@ -83,19 +83,19 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                 gen = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
                                       filter_width=int(gan_params.loc[i, "filter_width"]),
                                       min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                      max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                      min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                       output_size=scaled_data.shape[1:],
                                       stride=2)
                 disc = discriminator_model(input_size=scaled_data.shape[1:],
                                         stride=2,
                                         filter_width=int(gan_params.loc[i, "filter_width"]),
-                                        max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                         min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                         leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
                 enc = encoder_model(input_size=scaled_data.shape[1:],
                                     filter_width=int(gan_params.loc[i, "filter_width"]),
                                     min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                    max_conv_filters=int(gan_params.loc[i, "max_conv_filters"]),
+                                    min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                     output_size=int(gan_params.loc[i, "generator_input_size"]))
                 optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                                 beta_1=gan_params.loc[i, "beta_one"])
