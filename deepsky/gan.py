@@ -156,10 +156,22 @@ def stack_gen_encoder(generator, encoder):
     return model
 
 
+def stack_encoder_gen_disc(encoder, generator, discriminator):
+    model = Sequential()
+    for layer in encoder.layers:
+        model.add(layer)
+    for layer in generator.layers:
+        layer.trainable = False
+        model.add(layer)
+    for layer in discriminator.layers:
+        layer.trainable = False
+        model.add(layer)
+    return model
+
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
-              encoder=None, encoder_loss="mse", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+              encoder=None, encoder_loss="binary_crossentropy", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
               out_dtype="float32"):
     """
     Train generative adversarial network
@@ -191,11 +203,11 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     print(discriminator.summary())
     gen_on_disc = stack_gen_disc(generator, discriminator)
     gen_on_disc.compile(optimizer=gen_optimizer, loss=gen_loss, metrics=metrics)
-    gen_on_encoder = None
+    encoder_on_gan = None
     if encoder is not None:
         encoder.compile(optimizer=gen_optimizer, loss=encoder_loss)
-        gen_on_encoder = stack_gen_encoder(generator, encoder)
-        gen_on_encoder.compile(optimizer=gen_optimizer, loss=encoder_loss)
+        encoder_on_gan = stack_encoder_gen_disc(encoder, generator, discriminator)
+        encoder_on_gan.compile(optimizer=gen_optimizer, loss=encoder_loss)
     train_order = np.arange(train_data.shape[0])
     gen_loss_history = []
     disc_loss_history = []
@@ -232,7 +244,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
 
             current_epoch.append((epoch,b))
             if encoder is not None:
-                encoder_loss_history.append(gen_on_encoder.train_on_batch(gen_noise, gen_noise))
+                encoder_loss_history.append(encoder_on_gan.train_on_batch(combo_data_batch, gen_labels))
             time_history.append(pd.Timestamp("now"))
         if epoch in num_epochs:
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
