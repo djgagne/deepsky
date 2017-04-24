@@ -28,12 +28,12 @@ def main():
                           "dew_point_temperature_2_m_above_ground_prev",
                           "u-component_of_wind_10_m_above_ground_prev",
                           "v-component_of_wind_10_m_above_ground_prev"]
-        gan_path = "/scratch/dgagne/storm_gan/"
+        gan_path = "/scratch/dgagne/storm_gan_20170424/"
         out_dtype = "float32"
     gan_params = dict(generator_input_size=[10, 100],
                       filter_width=[5],
                       min_data_width=[2, 4],
-                      min_conv_filters=[64, 128, 256],
+                      min_conv_filters=[32, 64, 128],
                       leaky_relu_alpha=[0.2],
                       batch_size=[256],
                       learning_rate=[0.0001],
