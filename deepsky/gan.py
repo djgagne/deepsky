@@ -1,9 +1,9 @@
 from __future__ import division
 import numpy as np
 import pandas as pd
-from keras.models import Sequential
-from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, BatchNormalization
-from keras.layers import Activation, Reshape, LeakyReLU
+from keras.models import Sequential, Model
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input
+from keras.layers import Activation, Reshape, LeakyReLU, concatenate
 import xarray as xr
 from os.path import join
 
@@ -28,20 +28,20 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     num_layers = int(np.log2(output_size[0]) - np.log2(min_data_width))
     max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
     curr_conv_filters = max_conv_filters
-    model = Sequential()
-    model.add(Dense(input_shape=(input_size,), units=max_conv_filters * min_data_width * min_data_width))
-    model.add(Reshape((min_data_width, min_data_width, max_conv_filters)))
-    model.add(Activation("relu"))
+    vector_input = Input(shape=(input_size, ), name="gen_input")
+    model = Dense(input_shape=(input_size,), units=max_conv_filters * min_data_width * min_data_width)(vector_input)
+    model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
+    model = Activation("relu")(model)
     for i in range(1, num_layers):
         curr_conv_filters //= 2
-        model.add(Conv2DTranspose(curr_conv_filters, filter_width,
-                                  strides=(stride, stride), padding="same"))
-        model.add(Activation("relu"))
-    model.add(Conv2DTranspose(output_size[-1], filter_width,
+        model = Conv2DTranspose(curr_conv_filters, filter_width,
+                                  strides=(stride, stride), padding="same")(model)
+        model = Activation("relu")(model)
+    model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
-                              padding="same"))
-    model.add(Activation("tanh"))
-    return model
+                              padding="same")(model)
+    model = Activation("tanh")(model)
+    return model, vector_input
 
 
 def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
@@ -63,21 +63,22 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     """
     num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
-    model = Sequential()
+    image_input = Input(shape=input_size, name="enc_input")
+    model = None
     for c in range(num_layers):
         if c == 0:
-            model.add(Conv2D(curr_conv_filters, filter_width,
-                                    input_shape=input_size,
-                                    strides=(stride, stride), padding="same"))
+            model = Conv2D(curr_conv_filters, filter_width,
+                           input_shape=input_size,
+                           strides=(stride, stride), padding="same")(image_input)
         else:
-            model.add(Conv2D(curr_conv_filters, filter_width,
-                                    strides=(stride, stride), padding="same"))
-        model.add(Activation("relu"))
+            model = Conv2D(curr_conv_filters, filter_width,
+                           strides=(stride, stride), padding="same")(model)
+        model = Activation("relu")(model)
         curr_conv_filters *= 2
-    model.add(Flatten())
-    model.add(Dense(output_size))
-    model.add(Activation("tanh"))
-    return model
+    model = Flatten()(model)
+    model = Dense(output_size)(model)
+    model = Activation("tanh")(model)
+    return model, image_input
 
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
@@ -112,6 +113,67 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
     model.add(Dense(1))
     model.add(Activation("sigmoid"))
     return model
+
+
+def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, image_input_size=(32, 32, 1),
+                              latent_vector_input_size=(100,), stride=2, filter_width=5,
+                              min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2, latent_hidden_units=256):
+    """
+    Creates a discriminator model for a generative adversarial network.
+
+    Args:
+        input_size (tuple of size 3): Dimensions of input data
+        stride (int): Number of pixels the convolution filter is shifted between operations
+        filter_width (int): Width of convolution filters
+        min_conv_filters (int): Number of convolution filters in the first layer. Doubles in each subsequent layer
+        min_data_width (int): Smallest width of input data after convolution downsampling before flattening
+        leaky_relu_alpha (float): scaling coefficient for negative values in Leaky Rectified Linear Unit
+
+    Returns:
+        Keras generator model
+    """
+    num_layers = int(np.log2(image_input_size[0]) - np.log2(min_data_width))
+    curr_conv_filters = min_conv_filters
+    conv_layer_list = []
+    for c in range(num_layers):
+        if c == 0:
+            conv_layer_list.append(Conv2D(curr_conv_filters, filter_width, input_shape=image_input_size,
+                                          strides=(stride, stride), padding="same", name="image_first"))
+            conv_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
+        else:
+            conv_layer_list.append(Conv2D(curr_conv_filters, filter_width,
+                                          strides=(stride, stride), padding="same"))
+            conv_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
+        curr_conv_filters *= 2
+    conv_layer_list.append(Flatten())
+    vec_layer_list = []
+    vec_layer_list.append(Dense(latent_hidden_units, name="vector_first"))
+    vec_layer_list.append(Activation("tanh"))
+    combined_layer_list = []
+    combined_layer_list.append(Dense(1))
+    combined_layer_list.append(Activation("sigmoid"))
+    full_model = conv_layer_list[0](gen_model)
+    for conv_layer in conv_layer_list[1:]:
+        full_model = conv_layer(full_model)
+    full_model_vec = vec_layer_list[0](enc_model)
+    for vec_layer in vec_layer_list[1:]:
+        full_model_vec = vec_layer(full_model_vec)
+    full_model = concatenate([full_model, full_model_vec])
+    for combined_layer in combined_layer_list:
+        full_model = combined_layer(full_model)
+    full_model_obj = Model([image_input, vector_input], full_model)
+    disc_model = conv_layer_list[0](image_input)
+    for conv_layer in conv_layer_list[1:]:
+        disc_model = conv_layer(disc_model)
+    disc_model_vec = vec_layer_list[0](vector_input)
+    for vec_layer in vec_layer_list[1:]:
+        disc_model_vec = vec_layer(disc_model_vec)
+    disc_model = concatenate([disc_model, disc_model_vec])
+    for combined_layer in combined_layer_list:
+        disc_model = combined_layer(disc_model)
+
+    disc_model_obj = Model([image_input, vector_input], disc_model)
+    return full_model_obj, disc_model_obj
 
 
 def stack_gen_disc(generator, discriminator):
@@ -168,7 +230,31 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
         model.add(layer)
     return model
 
-def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(10, 100, 1000),
+
+def train_full_gan(train_data, generator, encoder, discriminator, combined_model, vec_size, gan_path, gan_index,
+                   batch_size=128, num_epochs=(1, 5, 10), min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+                   out_dtype="float32"):
+    batch_size = int(batch_size)
+    batch_half = int(batch_size // 2)
+    train_order = np.arange(train_data.shape[0])
+    disc_loss_history = []
+    combined_loss_history = []
+    time_history = []
+    current_epoch = []
+    batch_labels = np.zeros(batch_size, dtype=int)
+    batch_labels[:batch_half] = 1
+    batch_vec = np.zeros((batch_size, vec_size))
+    for epoch in range(1, max(num_epochs) + 1):
+        np.random.shuffle(train_order)
+        for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
+            batch_vec[:batch_half] = encoder.predict_on_batch(train_data[train_order[b_index - batch_half: b_index]])
+            batch_vec[batch_half:] = np.random.uniform(-1, 1, size=(batch_half, vec_size))
+
+
+    return
+
+
+def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(1, 5, 10),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
               encoder=None, encoder_loss="binary_crossentropy", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
