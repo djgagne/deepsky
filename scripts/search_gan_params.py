@@ -1,4 +1,4 @@
-from deepsky.gan import generator_model, discriminator_model, train_gan, encoder_model, rescale_multivariate_data
+from deepsky.gan import generator_model, joint_discriminator_model, train_full_gan, encoder_model, rescale_multivariate_data
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -7,10 +7,11 @@ from glob import glob
 import itertools as it
 import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
-from os.path import join
+from os.path import join, exists
+import os
 import traceback
 import argparse
-
+from datetime import datetime
 
 def main():
     parser = argparse.ArgumentParser()
@@ -19,7 +20,7 @@ def main():
     if args.tsi:
         data_path = "/scratch/dgagne/arm_tsi_sgp_nc/"
         variable_names = ["tsi_image"]
-        gan_path = "/scratch/dgagne/arm_gan/"
+        gan_path = "/scratch/dgagne/arm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "uint8"
     else:
         data_path = "/scratch/dgagne/ncar_ens_storm_patches/"
@@ -28,7 +29,7 @@ def main():
                           "dew_point_temperature_2_m_above_ground_prev",
                           "u-component_of_wind_10_m_above_ground_prev",
                           "v-component_of_wind_10_m_above_ground_prev"]
-        gan_path = "/scratch/dgagne/storm_gan_20170424/"
+        gan_path = "/scratch/dgagne/storm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "float32"
     gan_params = dict(generator_input_size=[10, 100],
                       filter_width=[5],
@@ -40,6 +41,7 @@ def main():
                       beta_one=[0.2])
     num_epochs = [1, 5, 10]
     num_gpus = 8
+    metrics = ("accuracy",)
     total_combinations = 1
     for param_name, values in gan_params.items():
         total_combinations *= len(values)
@@ -50,18 +52,37 @@ def main():
     gan_param_combos.to_csv(join(gan_path, "gan_param_combos.csv"), index_label="Index")
     pool = Pool(num_gpus)
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
+    if not exists(gan_path):
+        os.mkdir(gan_path)
     for gpu_num in range(num_gpus):
         pool.apply_async(evaluate_gan_config, (gpu_num, data_path, variable_names,
                                                num_epochs,
                                                gan_param_combos.iloc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
-                                               gan_path, out_dtype))
+                                               metrics, gan_path, out_dtype))
     pool.close()
     pool.join()
     return
 
 
-def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_params, gan_path, out_dtype):
+def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_params, metrics, gan_path, out_dtype):
+    """
+    
+    
+    Args:
+        gpu_num: 
+        data_path: 
+        variable_names: 
+        num_epochs: 
+        gan_params: 
+        metrics: 
+        gan_path: 
+        out_dtype: 
+
+    Returns:
+
+    """
     try:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(gpu_num)
         print("Loading data {0}".format(gpu_num))
         if "tsi" in data_path:
             data = load_tsi_data(data_path, variable_names)
@@ -71,41 +92,50 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
         min_vals = data.min(axis=0).min(axis=0).min(axis=0)
         print("Rescaling data {0}".format(gpu_num))
         scaled_data = rescale_multivariate_data(data)
-        with K.tf.device("/gpu:{0:d}".format(gpu_num)):
-            K.set_session(K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True, 
+        session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True,
                                                                gpu_options=K.tf.GPUOptions(allow_growth=True),
-                                                               log_device_placement=False)))
+                                                               log_device_placement=False))
+        K.set_session(session)
+        with K.tf.device("/gpu:{0:d}".format(0)):
             for i in gan_params.index.values:
                 print("Starting combo {0:d}".format(i))
                 print(gan_params.loc[i])
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
-                gen = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
-                                      filter_width=int(gan_params.loc[i, "filter_width"]),
-                                      min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                      min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                      output_size=scaled_data.shape[1:],
-                                      stride=2)
-                disc = discriminator_model(input_size=scaled_data.shape[1:],
-                                        stride=2,
-                                        filter_width=int(gan_params.loc[i, "filter_width"]),
-                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                        min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                        leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
-                enc = encoder_model(input_size=scaled_data.shape[1:],
-                                    filter_width=int(gan_params.loc[i, "filter_width"]),
-                                    min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                    min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                    output_size=int(gan_params.loc[i, "generator_input_size"]))
+                gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
+                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                 output_size=scaled_data.shape[1:],
+                                                 stride=2)
+                enc, image_input = encoder_model(input_size=scaled_data.shape[1:],
+                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                 output_size=int(gan_params.loc[i, "generator_input_size"]))
+                combined, disc = joint_discriminator_model(gen,
+                                                           enc,
+                                                           image_input,
+                                                           vec_input,
+                                                           stride=2,
+                                                           filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                           min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                           min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                           leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
                 optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                                 beta_1=gan_params.loc[i, "beta_one"])
-                history = train_gan(scaled_data[:-batch_diff], gen, disc, gan_path, i,
-                                    batch_size=int(gan_params.loc[i, "batch_size"]),
-                                    gen_input_size=int(gan_params.loc[i, "generator_input_size"]),
-                                    num_epochs=num_epochs,
-                                    gen_optimizer=optimizer, disc_optimizer=optimizer,
-                                    encoder=enc, max_vals=max_vals, min_vals=min_vals, out_dtype=out_dtype)
-                history.to_csv(join(gan_path, "gan_loss_history_{0:06d}.csv".format(i)), index_label="Time")
+                gen.compile(optimizer=optimizer, loss="mse")
+                enc.compile(optimizer=optimizer, loss="mse")
+                disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                combined.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                history = train_full_gan(scaled_data[:-batch_diff], gen, enc, disc, combined,
+                                         int(gan_params.loc[i, "generator_input_size"]),
+                                         gan_path, i,
+                                         batch_size=int(gan_params.loc[i, "batch_size"]),
+                                         metrics=metrics,
+                                         num_epochs=num_epochs, max_vals=max_vals,
+                                         min_vals=min_vals, out_dtype=out_dtype)
+                history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(i)), index_label="Time")
     except Exception as e:
         print(traceback.format_exc())
         raise e

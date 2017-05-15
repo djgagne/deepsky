@@ -2,11 +2,11 @@ from __future__ import division
 import numpy as np
 import pandas as pd
 from keras.models import Sequential, Model
-from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D
 from keras.layers import Activation, Reshape, LeakyReLU, concatenate
 import xarray as xr
 from os.path import join
-
+import keras.backend as K
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     min_conv_filters=64, output_size=(32, 32, 1), stride=2):
@@ -115,14 +115,16 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
     return model
 
 
-def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, image_input_size=(32, 32, 1),
-                              latent_vector_input_size=(100,), stride=2, filter_width=5,
-                              min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2, latent_hidden_units=256):
+def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, stride=2, filter_width=5,
+                              min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2):
     """
     Creates a discriminator model for a generative adversarial network.
 
     Args:
-        input_size (tuple of size 3): Dimensions of input data
+        gen_model (keras layers): Connected generator model layers before they are input into Model
+        enc_model (keras layers): Connected encoder model layers before they are input into Model
+        image_input (keras Input layer): Input layer for image-like data
+        vector_input (keras Input layer): Input layer for low-dimensional vector
         stride (int): Number of pixels the convolution filter is shifted between operations
         filter_width (int): Width of convolution filters
         min_conv_filters (int): Number of convolution filters in the first layer. Doubles in each subsequent layer
@@ -130,14 +132,17 @@ def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, i
         leaky_relu_alpha (float): scaling coefficient for negative values in Leaky Rectified Linear Unit
 
     Returns:
-        Keras generator model
+        Combined generator, encoder, and discriminator; Discriminator
     """
+    image_input_size = image_input.shape.as_list()[1:]
+    vector_input_size = vector_input.shape.as_list()[1:]
     num_layers = int(np.log2(image_input_size[0]) - np.log2(min_data_width))
+    num_vec_layers = int(np.log2(vector_input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
-    conv_layer_list = []
+    conv_layer_list = list()
     for c in range(num_layers):
         if c == 0:
-            conv_layer_list.append(Conv2D(curr_conv_filters, filter_width, input_shape=image_input_size,
+            conv_layer_list.append(Conv2D(curr_conv_filters, filter_width,
                                           strides=(stride, stride), padding="same", name="image_first"))
             conv_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
         else:
@@ -146,10 +151,14 @@ def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, i
             conv_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
         curr_conv_filters *= 2
     conv_layer_list.append(Flatten())
-    vec_layer_list = []
-    vec_layer_list.append(Dense(latent_hidden_units, name="vector_first"))
-    vec_layer_list.append(Activation("tanh"))
-    combined_layer_list = []
+    vec_layer_list = list()
+    vec_layer_list.append(Reshape(tuple(vector_input_size + [1]), name="vector_first"))
+    curr_vec_conv_filters = min_conv_filters
+    for c in range(num_vec_layers):
+        vec_layer_list.append(Conv1D(curr_vec_conv_filters, filter_width, strides=stride, padding="same"))
+        vec_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
+        curr_vec_conv_filters *= 2
+    combined_layer_list = list()
     combined_layer_list.append(Dense(1))
     combined_layer_list.append(Activation("sigmoid"))
     full_model = conv_layer_list[0](gen_model)
@@ -171,7 +180,6 @@ def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, i
     disc_model = concatenate([disc_model, disc_model_vec])
     for combined_layer in combined_layer_list:
         disc_model = combined_layer(disc_model)
-
     disc_model_obj = Model([image_input, vector_input], disc_model)
     return full_model_obj, disc_model_obj
 
@@ -232,8 +240,33 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
 
 
 def train_full_gan(train_data, generator, encoder, discriminator, combined_model, vec_size, gan_path, gan_index,
+                   metrics=("accuracy", ),
                    batch_size=128, num_epochs=(1, 5, 10), min_vals=(0, 0, 0), max_vals=(255, 255, 255),
-                   out_dtype="float32"):
+                   out_dtype="uint8"):
+    """
+    Train GAN model that contains 3 networks with the discriminator receiving joint information from the generator and
+    encoder simultaneously.
+    
+    Args:
+        train_data: Numpy array of gridded data
+        generator: Compiled generator network object
+        encoder: Compiled encoder network object
+        discriminator: Compiled discriminator network object
+        combined_model: Compiled combination of encoder, generator, and discriminator where the discriminator
+            weights are frozen.
+        vec_size: Size of the encoded vector (input of generator and output of encoder)
+        gan_path: Path to where GAN model and log files are saved
+        gan_index: GAN Configuration number 
+        metrics: Additional metrics to track during GAN training
+        batch_size: Number of training examples per mini-batch
+        num_epochs: Epochs when models are saved to disk
+        min_vals: Minimum values of each training data dimension for scaling purposes
+        max_vals: Maximum values of each training data dimension for scaling purposes
+        out_dtype: Datatype of synthetic examples
+
+    Returns:
+
+    """
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     train_order = np.arange(train_data.shape[0])
@@ -263,8 +296,9 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
                                                                                 epoch,
                                                                                 b,
                                                                                 pd.Timestamp("now")))
-            combined_loss_history.append(combined_model.train_on_batch([combo_data_batch, batch_vec], batch_labels[::-1]))
-                  time_history.append(pd.Timestamp("now"))
+            combined_loss_history.append(combined_model.train_on_batch([combo_data_batch, batch_vec],
+                                                                       batch_labels[::-1]))
+            time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch,b))
         if epoch in num_epochs:
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
@@ -272,7 +306,7 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
                                                                  pd.Timestamp("now")))
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
-            gen_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
+            gen_noise = np.random.uniform(-1, 1, size=(batch_size, vec_size))
             gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), min_vals, max_vals)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
@@ -289,7 +323,11 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
             history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
                                    index=time_history_index, columns=hist_cols)
             history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
-    return
+    time_history_index = pd.DatetimeIndex(time_history)
+    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
+                           index=time_history_index, columns=hist_cols)
+    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
+    return history
 
 
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(1, 5, 10),
@@ -398,6 +436,14 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, gen_loss_history, encoder_history]),
                            index=time_history, columns=hist_cols)
     return history
+
+
+def wgan(y_true, y_pred):
+    fake_examples = K.tf.transpose(K.tf.where(y_true == 0))
+    real_examples = K.tf.transpose(K.tf.where(y_true == 1))
+    fake_score = K.mean(K.tf.gather(y_pred, fake_examples))
+    real_score = K.mean(K.tf.gather(y_pred, real_examples))
+    return fake_score - real_score
 
 
 def rescale_data(data):
