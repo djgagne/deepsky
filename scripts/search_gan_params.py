@@ -34,18 +34,20 @@ def main():
                           "v-component_of_wind_10_m_above_ground_prev"]
         gan_path = "/scratch/dgagne/storm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "float32"
-    gan_params = dict(generator_input_size=[10, 100],
+    gan_params = dict(generator_input_size=[8, 32, 128],
                       filter_width=[5],
-                      min_data_width=[2, 4],
-                      min_conv_filters=[32, 64, 128],
-                      leaky_relu_alpha=[0.2],
+                      min_data_width=[4],
+                      min_conv_filters=[64, 128],
+                      leaky_relu_alpha=[0.02],
                       batch_size=[256],
                       learning_rate=[0.0001],
                       beta_one=[0.2])
-    num_epochs = [1, 5, 10]
-    num_gpus = 8
-    metrics = ("accuracy",)
+    num_epochs = [1, 2, 3]
+    num_gpus = 6
+    metrics = ("accuracy", "binary_crossentropy")
     total_combinations = 1
+    if not exists(gan_path):
+        os.mkdir(gan_path)
     for param_name, values in gan_params.items():
         total_combinations *= len(values)
     print(total_combinations)
@@ -164,12 +166,12 @@ def load_storm_patch_data(data_path, variable_names):
     data_patches = []
     data_files = sorted(glob(join(data_path, "*.nc")))
     for data_file in data_files:
+        print(data_file)
         ds = xr.open_dataset(data_file)
         patch_arr = []
         for variable in variable_names:
             patch_arr.append(ds[variable].values)
         data_patches.append(np.stack(patch_arr, axis=-1))
-        print(data_patches[-1].shape)
     data = np.vstack(data_patches)
     return data
 
