@@ -1,4 +1,5 @@
-from deepsky.gan import generator_model, joint_discriminator_model, train_full_gan, encoder_model, rescale_multivariate_data
+from deepsky.gan import generator_model, train_linked_gan, encoder_disc_model, rescale_multivariate_data
+from deepsky.gan import stack_gen_disc, stack_gen_encoder
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -7,11 +8,13 @@ from glob import glob
 import itertools as it
 import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
+from keras.models import Model
 from os.path import join, exists
 import os
 import traceback
 import argparse
 from datetime import datetime
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -108,33 +111,32 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                                                  min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                                  output_size=scaled_data.shape[1:],
                                                  stride=2)
-                enc, image_input = encoder_model(input_size=scaled_data.shape[1:],
-                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
-                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                                 output_size=int(gan_params.loc[i, "generator_input_size"]))
-                combined, disc = joint_discriminator_model(gen,
-                                                           enc,
-                                                           image_input,
-                                                           vec_input,
-                                                           stride=2,
-                                                           filter_width=int(gan_params.loc[i, "filter_width"]),
-                                                           min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                                           min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                                           leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
+                disc, enc, image_input = encoder_disc_model(input_size=scaled_data.shape[1:],
+                                                            filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                            min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                            min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                            output_size=int(gan_params.loc[i, "generator_input_size"]))
+
                 optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                                 beta_1=gan_params.loc[i, "beta_one"])
-                gen.compile(optimizer=optimizer, loss="mse")
-                enc.compile(optimizer=optimizer, loss="mse")
-                disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                combined.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                history = train_full_gan(scaled_data[:-batch_diff], gen, enc, disc, combined,
-                                         int(gan_params.loc[i, "generator_input_size"]),
-                                         gan_path, i,
-                                         batch_size=int(gan_params.loc[i, "batch_size"]),
-                                         metrics=metrics,
-                                         num_epochs=num_epochs, max_vals=max_vals,
-                                         min_vals=min_vals, out_dtype=out_dtype)
+                gen_model = Model(vec_input, gen)
+                disc_model = Model(image_input, disc)
+                enc_model = Model(image_input, enc)
+                gen_model.compile(optimizer=optimizer, loss="mse")
+                enc_model.compile(optimizer=optimizer, loss="mse")
+                disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                gen_disc = stack_gen_disc(disc_model, gen_model)
+                gen_enc = stack_gen_encoder(gen_model, enc_model)
+                gen_disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                gen_enc.compile(optimizer=optimizer, loss="mae")
+                history = train_linked_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc_model,
+                                           gen_disc, gen_enc,
+                                           int(gan_params.loc[i, "generator_input_size"]),
+                                           gan_path, i,
+                                           batch_size=int(gan_params.loc[i, "batch_size"]),
+                                           metrics=metrics,
+                                           num_epochs=num_epochs, max_vals=max_vals,
+                                           min_vals=min_vals, out_dtype=out_dtype)
                 history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(i)), index_label="Time")
     except Exception as e:
         print(traceback.format_exc())
