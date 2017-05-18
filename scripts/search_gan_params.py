@@ -1,4 +1,4 @@
-from deepsky.gan import generator_model, joint_discriminator_model, train_full_gan, encoder_model, rescale_multivariate_data
+from deepsky.gan import wgan, generator_model, joint_discriminator_model, train_full_gan, encoder_model, rescale_multivariate_data
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -7,6 +7,7 @@ from glob import glob
 import itertools as it
 import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
+from keras.models import Model
 from os.path import join, exists
 import os
 import traceback
@@ -31,18 +32,20 @@ def main():
                           "v-component_of_wind_10_m_above_ground_prev"]
         gan_path = "/scratch/dgagne/storm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "float32"
-    gan_params = dict(generator_input_size=[10, 100],
+    gan_params = dict(generator_input_size=[8, 32, 128],
                       filter_width=[5],
-                      min_data_width=[2, 4],
-                      min_conv_filters=[32, 64, 128],
-                      leaky_relu_alpha=[0.2],
+                      min_data_width=[4],
+                      min_conv_filters=[64, 128],
+                      leaky_relu_alpha=[0.02],
                       batch_size=[256],
                       learning_rate=[0.0001],
                       beta_one=[0.2])
-    num_epochs = [1, 5, 10]
-    num_gpus = 8
-    metrics = ("accuracy",)
+    num_epochs = [1, 2, 3]
+    num_gpus = 6
+    metrics = ("accuracy", "binary_crossentropy")
     total_combinations = 1
+    if not exists(gan_path):
+        os.mkdir(gan_path)
     for param_name, values in gan_params.items():
         total_combinations *= len(values)
     print(total_combinations)
@@ -52,8 +55,6 @@ def main():
     gan_param_combos.to_csv(join(gan_path, "gan_param_combos.csv"), index_label="Index")
     pool = Pool(num_gpus)
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
-    if not exists(gan_path):
-        os.mkdir(gan_path)
     for gpu_num in range(num_gpus):
         pool.apply_async(evaluate_gan_config, (gpu_num, data_path, variable_names,
                                                num_epochs,
@@ -124,18 +125,24 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                                                            leaky_relu_alpha=gan_params.loc[i, "leaky_relu_alpha"])
                 optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                                 beta_1=gan_params.loc[i, "beta_one"])
-                gen.compile(optimizer=optimizer, loss="mse")
-                enc.compile(optimizer=optimizer, loss="mse")
-                disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                combined.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                history = train_full_gan(scaled_data[:-batch_diff], gen, enc, disc, combined,
+                gen_model = Model(vec_input, gen)
+                enc_model = Model(image_input, enc)
+                gen_model.compile(optimizer=optimizer, loss="mse")
+                enc_model.compile(optimizer=optimizer, loss="mse")
+                disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=list(metrics))
+                for layer in combined.layers:
+                    if layer in disc.layers:
+                        layer.trainable = False
+                combined.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=list(metrics))
+                print(disc.summary())
+                print(combined.summary())
+                train_full_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc, combined,
                                          int(gan_params.loc[i, "generator_input_size"]),
                                          gan_path, i,
                                          batch_size=int(gan_params.loc[i, "batch_size"]),
                                          metrics=metrics,
                                          num_epochs=num_epochs, max_vals=max_vals,
                                          min_vals=min_vals, out_dtype=out_dtype)
-                history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(i)), index_label="Time")
     except Exception as e:
         print(traceback.format_exc())
         raise e
@@ -162,12 +169,12 @@ def load_storm_patch_data(data_path, variable_names):
     data_patches = []
     data_files = sorted(glob(join(data_path, "*.nc")))
     for data_file in data_files:
+        print(data_file)
         ds = xr.open_dataset(data_file)
         patch_arr = []
         for variable in variable_names:
             patch_arr.append(ds[variable].values)
         data_patches.append(np.stack(patch_arr, axis=-1))
-        print(data_patches[-1].shape)
     data = np.vstack(data_patches)
     return data
 

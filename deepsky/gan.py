@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from keras.models import Sequential, Model
 from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D
-from keras.layers import Activation, Reshape, LeakyReLU, concatenate
+from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout
 import xarray as xr
 from os.path import join
 import keras.backend as K
@@ -29,7 +29,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
     curr_conv_filters = max_conv_filters
     vector_input = Input(shape=(input_size, ), name="gen_input")
-    model = Dense(input_shape=(input_size,), units=max_conv_filters * min_data_width * min_data_width)(vector_input)
+    model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
     model = Activation("relu")(model)
     for i in range(1, num_layers):
@@ -68,7 +68,6 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     for c in range(num_layers):
         if c == 0:
             model = Conv2D(curr_conv_filters, filter_width,
-                           input_shape=input_size,
                            strides=(stride, stride), padding="same")(image_input)
         else:
             model = Conv2D(curr_conv_filters, filter_width,
@@ -116,7 +115,7 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
 
 
 def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, stride=2, filter_width=5,
-                              min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2):
+                              min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2, num_vec_layers=2, vec_conv_filters=128):
     """
     Creates a discriminator model for a generative adversarial network.
 
@@ -137,8 +136,12 @@ def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, s
     image_input_size = image_input.shape.as_list()[1:]
     vector_input_size = vector_input.shape.as_list()[1:]
     num_layers = int(np.log2(image_input_size[0]) - np.log2(min_data_width))
-    num_vec_layers = int(np.log2(vector_input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
+    max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
+    vec_layer_list = list()
+    vec_layer_list.append(Dense(int(np.prod(image_input_size[:-1]))))
+    vec_layer_list.append(Activation("tanh"))
+    vec_layer_list.append(Reshape((image_input_size[0], image_input_size[1], 1)))
     conv_layer_list = list()
     for c in range(num_layers):
         if c == 0:
@@ -151,33 +154,26 @@ def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, s
             conv_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
         curr_conv_filters *= 2
     conv_layer_list.append(Flatten())
-    vec_layer_list = list()
-    vec_layer_list.append(Reshape(tuple(vector_input_size + [1]), name="vector_first"))
-    curr_vec_conv_filters = min_conv_filters
-    for c in range(num_vec_layers):
-        vec_layer_list.append(Conv1D(curr_vec_conv_filters, filter_width, strides=stride, padding="same"))
-        vec_layer_list.append(LeakyReLU(alpha=leaky_relu_alpha))
-        curr_vec_conv_filters *= 2
     combined_layer_list = list()
     combined_layer_list.append(Dense(1))
     combined_layer_list.append(Activation("sigmoid"))
-    full_model = conv_layer_list[0](gen_model)
-    for conv_layer in conv_layer_list[1:]:
-        full_model = conv_layer(full_model)
+    full_model = gen_model
     full_model_vec = vec_layer_list[0](enc_model)
     for vec_layer in vec_layer_list[1:]:
         full_model_vec = vec_layer(full_model_vec)
     full_model = concatenate([full_model, full_model_vec])
+    for conv_layer in conv_layer_list:
+        full_model = conv_layer(full_model)
     for combined_layer in combined_layer_list:
         full_model = combined_layer(full_model)
     full_model_obj = Model([image_input, vector_input], full_model)
-    disc_model = conv_layer_list[0](image_input)
-    for conv_layer in conv_layer_list[1:]:
-        disc_model = conv_layer(disc_model)
+    disc_model = image_input
     disc_model_vec = vec_layer_list[0](vector_input)
     for vec_layer in vec_layer_list[1:]:
         disc_model_vec = vec_layer(disc_model_vec)
     disc_model = concatenate([disc_model, disc_model_vec])
+    for conv_layer in conv_layer_list:
+        disc_model = conv_layer(disc_model)
     for combined_layer in combined_layer_list:
         disc_model = combined_layer(disc_model)
     disc_model_obj = Model([image_input, vector_input], disc_model)
@@ -291,13 +287,24 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
                                                                                     epoch,
                                                                                     b,
                                                                                     pd.Timestamp("now")))
-            disc_loss_history.append(discriminator.train_on_batch([combo_data_batch, batch_vec], batch_labels))
+            
+            #for l in discriminator.layers:
+            #    weights = l.get_weights()
+            #    weights = [np.clip(w, -0.1, 0.1) for w in weights]
+            #    l.set_weights(weights)
+            disc_loss_history.append(discriminator.train_on_batch([combo_data_batch, batch_vec], batch_labels)) 
+            print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
+                                                                                                    epoch, b,
+                                                                                                    *disc_loss_history[-1]))
             print("{3} Train Gen/Encoder Combo: {0} Epoch: {1} Batch: {2}".format(gan_index,
                                                                                 epoch,
                                                                                 b,
                                                                                 pd.Timestamp("now")))
             combined_loss_history.append(combined_model.train_on_batch([combo_data_batch, batch_vec],
                                                                        batch_labels[::-1]))
+            print("Combined Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
+                                                                                                        epoch, b,
+                                                                                                        *combined_loss_history[-1]))
             time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch,b))
         if epoch in num_epochs:
@@ -322,12 +329,12 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
             time_history_index = pd.DatetimeIndex(time_history)
             history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
                                    index=time_history_index, columns=hist_cols)
-            history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
+            history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
                            index=time_history_index, columns=hist_cols)
-    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
-    return history
+    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+    return
 
 
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(1, 5, 10),
@@ -439,11 +446,9 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
 
 
 def wgan(y_true, y_pred):
-    fake_examples = K.tf.transpose(K.tf.where(y_true == 0))
-    real_examples = K.tf.transpose(K.tf.where(y_true == 1))
-    fake_score = K.mean(K.tf.gather(y_pred, fake_examples))
-    real_score = K.mean(K.tf.gather(y_pred, real_examples))
-    return fake_score - real_score
+    real_score = K.sum(y_pred * y_true) / K.sum(y_true)
+    fake_score = K.sum(y_pred * K.reverse(y_true, 0)) / K.sum(y_true)
+    return K.abs(fake_score - real_score)
 
 
 def rescale_data(data):
