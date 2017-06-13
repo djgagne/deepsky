@@ -101,16 +101,16 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
     image_input = Input(shape=input_size, name="enc_input")
-    model = None
+    model = image_input
     for c in range(num_layers):
         model = Conv2D(curr_conv_filters, filter_width,
                        strides=(stride, stride), padding="same")(model)
         model = Activation("relu")(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
-    model = Dense(output_size)(model)
-    enc_model = Activation("tanh")(model)
-    disc_model = Dense(1)(enc_model)
+    enc_model = Dense(output_size)(model)
+    enc_model = Activation("tanh")(enc_model)
+    disc_model = Dense(1)(model)
     disc_model = Activation("sigmoid")(disc_model)
     return disc_model, enc_model, image_input
 
@@ -235,7 +235,7 @@ def stack_gen_disc(generator, discriminator):
     return model
 
 
-def stack_gen_encoder(generator, encoder):
+def stack_gen_encoder(generator, encoder, discriminator):
     """
     Combines generator and encoder layers together while freezing the weights of the generator layers.
     This is used to train the encoder network to convert image data into a low-dimensional vector
@@ -252,7 +252,8 @@ def stack_gen_encoder(generator, encoder):
         layer.trainable = True
         model.add(layer)
     for layer in encoder.layers:
-        layer.trainable = True
+        if layer in discriminator.layers:
+            layer.trainable = False
         model.add(layer)
     return model
 
@@ -283,6 +284,8 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, ge
     current_epoch = []
     batch_labels = np.zeros(batch_size, dtype=int)
     batch_labels[:batch_half] = 1
+    disc_labels = np.zeros(batch_size, dtype=int)
+    gen_labels = np.ones(batch_size, dtype=int)
     batch_vec = np.zeros((batch_size, vec_size))
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
@@ -290,22 +293,26 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, ge
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            batch_vec[:batch_half] = encoder.predict_on_batch(train_data[train_order[b_index - batch_half: b_index]])
-            batch_vec[batch_half:] = np.random.uniform(-1, 1, size=(batch_half, vec_size))
+            #batch_vec[:batch_half] = encoder.predict_on_batch(train_data[train_order[b_index - batch_half: b_index]])
+            disc_labels[:] = batch_labels[:]
+            label_switches = np.random.binomial(1, 0.05, size=(batch_size))
+            disc_labels[label_switches == 1] = 1 - disc_labels[label_switches == 1]
+            batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
-            print("{3} Train Discriminator Combo: {0} Epoch: {1} Batch: {2}".format(gan_index,
-                                                                                    epoch,
-                                                                                    b,
-                                                                                    pd.Timestamp("now")))
-            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
-            print("{3} Train Generator Combo: {0} Epoch: {1} Batch: {2}".format(gan_index,
-                                                                                  epoch,
-                                                                                  b,
-                                                                                  pd.Timestamp("now")))
+            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, disc_labels))
+            print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
+                                                                                                    epoch, b,
+                                                                                                    *disc_loss_history[-1]))
             gen_loss_history.append(gen_disc.train_on_batch(batch_vec,
-                                                            batch_labels[::-1]))
+                                                            gen_labels))
+            print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
+                                                                                                        epoch, b,
+                                                                                                        *gen_loss_history[-1]))
             gen_enc_loss_history.append(gen_enc.train_on_batch(batch_vec, batch_vec))
+            print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
+                                                                                   epoch, b,
+                                                                                   gen_enc_loss_history[-1]))
             time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch, b))
         if epoch in num_epochs:
@@ -328,16 +335,17 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, ge
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
             encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
-            time_history_index = pd.DatetimeIndex(time_history)
-            history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
-                                              gen_loss_history, gen_enc_loss_history]),
-                                   index=time_history_index, columns=hist_cols)
-            history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
+        time_history_index = pd.DatetimeIndex(time_history)
+        history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
+                                            gen_loss_history, np.array(gen_enc_loss_history).reshape(-1, 1)]),
+                                index=time_history_index, columns=hist_cols)
+        history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
-                                      gen_loss_history, gen_enc_loss_history]),
+                                      gen_loss_history, 
+                                      np.array(gen_enc_loss_history).reshape(-1, 1)]),
                            index=time_history_index, columns=hist_cols)
-    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_col="Time")
+    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
     return history
 
 
@@ -554,7 +562,17 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
 def wgan(y_true, y_pred):
     real_score = K.sum(y_pred * y_true) / K.sum(y_true)
     fake_score = K.sum(y_pred * K.reverse(y_true, 0)) / K.sum(y_true)
-    return K.abs(fake_score - real_score)
+    return fake_score - real_score
+
+
+def gan_loss(y_true, y_pred):
+    y_true_flat = K.flatten(y_true)
+    y_pred_flat = K.flatten(y_pred)
+    zeros = K.zeros_like(y_true_flat)
+    ones = K.ones_like(y_true_flat)
+    switched = K.tf.where(K.equal(y_true_flat, zeros), ones - y_pred_flat, y_pred_flat)
+    switched_nonzero = K.tf.where(K.equal(switched, zeros), ones * 0.001, switched)
+    return -K.mean(K.log(switched_nonzero))
 
 
 def rescale_data(data):

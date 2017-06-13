@@ -1,5 +1,5 @@
 from deepsky.gan import generator_model, train_linked_gan, encoder_disc_model, rescale_multivariate_data
-from deepsky.gan import stack_gen_disc, stack_gen_encoder
+from deepsky.gan import stack_gen_disc, stack_gen_encoder, gan_loss
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -34,7 +34,7 @@ def main():
                           "v-component_of_wind_10_m_above_ground_prev"]
         gan_path = "/scratch/dgagne/storm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "float32"
-    gan_params = dict(generator_input_size=[8, 32, 128],
+    gan_params = dict(generator_input_size=[16, 32, 128],
                       filter_width=[5],
                       min_data_width=[4],
                       min_conv_filters=[64, 128],
@@ -42,9 +42,9 @@ def main():
                       batch_size=[256],
                       learning_rate=[0.0001],
                       beta_one=[0.2])
-    num_epochs = [1, 2, 3]
+    num_epochs = [1, 2, 3, 4, 5, 8, 10]
     num_gpus = 6
-    metrics = ("accuracy", "binary_crossentropy")
+    metrics = ["accuracy", "binary_crossentropy"]
     total_combinations = 1
     if not exists(gan_path):
         os.mkdir(gan_path)
@@ -124,12 +124,12 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                 gen_model = Model(vec_input, gen)
                 disc_model = Model(image_input, disc)
                 enc_model = Model(image_input, enc)
-                gen_model.compile(optimizer=optimizer, loss="mse")
-                enc_model.compile(optimizer=optimizer, loss="mse")
-                disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                gen_disc = stack_gen_disc(disc_model, gen_model)
-                gen_enc = stack_gen_encoder(gen_model, enc_model)
-                gen_disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                gen_model.compile(optimizer=optimizer, loss="mae")
+                enc_model.compile(optimizer=optimizer, loss="mae")
+                disc_model.compile(optimizer=optimizer, loss=gan_loss, metrics=metrics)
+                gen_disc = stack_gen_disc(gen_model, disc_model)
+                gen_enc = stack_gen_encoder(gen_model, enc_model, disc_model)
+                gen_disc.compile(optimizer=optimizer, loss=gan_loss, metrics=metrics)
                 gen_enc.compile(optimizer=optimizer, loss="mae")
                 history = train_linked_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc_model,
                                            gen_disc, gen_enc,
@@ -166,7 +166,7 @@ def load_storm_patch_data(data_path, variable_names):
     data_patches = []
     data_files = sorted(glob(join(data_path, "*.nc")))
     for data_file in data_files:
-        print(data_file)
+        print(data_file.split("/")[-1])
         ds = xr.open_dataset(data_file)
         patch_arr = []
         for variable in variable_names:
