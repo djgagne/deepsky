@@ -32,12 +32,12 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     vector_input = Input(shape=(input_size, ), name="gen_input")
     model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
-    model = Activation("relu")(model)
+    model = Activation("elu")(model)
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, filter_width,
                                   strides=(stride, stride), padding="same")(model)
-        model = Activation("relu")(model)
+        model = Activation("elu")(model)
     model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
                               padding="same")(model)
@@ -73,7 +73,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         else:
             model = Conv2D(curr_conv_filters, filter_width,
                            strides=(stride, stride), padding="same")(model)
-        model = Activation("relu")(model)
+        model = Activation("elu")(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     model = Dense(output_size)(model)
@@ -105,7 +105,7 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     for c in range(num_layers):
         model = Conv2D(curr_conv_filters, filter_width,
                        strides=(stride, stride), padding="same")(model)
-        model = Activation("relu")(model)
+        model = Activation("elu")(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     enc_model = Dense(output_size)(model)
@@ -249,11 +249,35 @@ def stack_gen_encoder(generator, encoder, discriminator):
     """
     model = Sequential()
     for layer in generator.layers:
-        layer.trainable = True
+        layer.trainable = False
         model.add(layer)
     for layer in encoder.layers:
         if layer in discriminator.layers:
             layer.trainable = False
+        model.add(layer)
+    return model
+
+
+def stack_enc_gen(encoder, generator, discriminator):
+    """
+    Combines encoder and generator layers together while freezing the weights of all layers except the last
+    in the encoder. This is used to train the encoder network to convert image data into a low-dimensional vector
+     representation.
+
+    Args:
+        encoder: Encoder network
+        generator: Decoder network
+        discriminator: Discriminator network. Used to freeze shared layers in encoder
+    Returns:
+        Encoder layers attached to generator layers
+    """
+    model = Sequential()
+    for layer in encoder.layers:
+        if layer in discriminator.layers:
+            layer.trainable = False
+        model.add(layer)
+    for layer in generator.layers:
+        layer.trainable = False
         model.add(layer)
     return model
 
@@ -271,7 +295,7 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
     return model
 
 
-def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, gen_enc, vec_size, gan_path, gan_index,
+def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, enc_gen, vec_size, gan_path, gan_index,
                      metrics=("accuracy", ), batch_size=128, num_epochs=(1, 5, 10), min_vals=(0, 0, 0),
                      max_vals=(255, 255, 255), out_dtype="uint8"):
     batch_size = int(batch_size)
@@ -293,10 +317,9 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, ge
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            #batch_vec[:batch_half] = encoder.predict_on_batch(train_data[train_order[b_index - batch_half: b_index]])
             disc_labels[:] = batch_labels[:]
-            label_switches = np.random.binomial(1, 0.05, size=(batch_size))
-            disc_labels[label_switches == 1] = 1 - disc_labels[label_switches == 1]
+            #label_switches = np.random.binomial(1, 0.05, size=(batch_size))
+            #disc_labels[label_switches == 1] = 1 - disc_labels[label_switches == 1]
             batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
@@ -309,7 +332,7 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, ge
             print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
                                                                                                         epoch, b,
                                                                                                         *gen_loss_history[-1]))
-            gen_enc_loss_history.append(gen_enc.train_on_batch(batch_vec, batch_vec))
+            gen_enc_loss_history.append(enc_gen.train_on_batch(combo_data_batch, combo_data_batch))
             print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
                                                                                    epoch, b,
                                                                                    gen_enc_loss_history[-1]))

@@ -1,5 +1,5 @@
 from deepsky.gan import generator_model, train_linked_gan, encoder_disc_model, rescale_multivariate_data
-from deepsky.gan import stack_gen_disc, stack_gen_encoder, gan_loss
+from deepsky.gan import stack_gen_disc, stack_enc_gen
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool
@@ -38,7 +38,6 @@ def main():
                       filter_width=[5],
                       min_data_width=[4],
                       min_conv_filters=[64, 128],
-                      leaky_relu_alpha=[0.02],
                       batch_size=[256],
                       learning_rate=[0.0001],
                       beta_one=[0.2])
@@ -126,13 +125,13 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                 enc_model = Model(image_input, enc)
                 gen_model.compile(optimizer=optimizer, loss="mae")
                 enc_model.compile(optimizer=optimizer, loss="mae")
-                disc_model.compile(optimizer=optimizer, loss=gan_loss, metrics=metrics)
+                disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
                 gen_disc = stack_gen_disc(gen_model, disc_model)
-                gen_enc = stack_gen_encoder(gen_model, enc_model, disc_model)
-                gen_disc.compile(optimizer=optimizer, loss=gan_loss, metrics=metrics)
-                gen_enc.compile(optimizer=optimizer, loss="mae")
+                enc_gen = stack_enc_gen(gen_model, enc_model, disc_model)
+                gen_disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                enc_gen.compile(optimizer=optimizer, loss="mae")
                 history = train_linked_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc_model,
-                                           gen_disc, gen_enc,
+                                           gen_disc, enc_gen,
                                            int(gan_params.loc[i, "generator_input_size"]),
                                            gan_path, i,
                                            batch_size=int(gan_params.loc[i, "batch_size"]),
