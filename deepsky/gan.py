@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from keras.models import Sequential, Model
 from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D
-from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout
+from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, BatchNormalization
 import xarray as xr
 from os.path import join
 import keras.backend as K
@@ -32,12 +32,17 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     vector_input = Input(shape=(input_size, ), name="gen_input")
     model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
-    model = Activation("elu")(model)
+    #model = Activation("elu")(model)
+    #model = BatchNormalization(momentum=0.9)(model)
+    model = LeakyReLU(alpha=0.2)(model)
+    #model = Dropout(0.4)(model)
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, filter_width,
                                   strides=(stride, stride), padding="same")(model)
-        model = Activation("elu")(model)
+        #model = Activation("elu")(model)
+        #model = BatchNormalization(momentum=0.9)(model)
+        model = LeakyReLU(alpha=0.2)(model)
     model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
                               padding="same")(model)
@@ -105,7 +110,9 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     for c in range(num_layers):
         model = Conv2D(curr_conv_filters, filter_width,
                        strides=(stride, stride), padding="same")(model)
-        model = Activation("elu")(model)
+        #model = Activation("elu")(model)
+        model = LeakyReLU(alpha=0.2)(model)
+        #model = Dropout(0.4)(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     enc_model = Dense(output_size)(model)
@@ -226,13 +233,10 @@ def stack_gen_disc(generator, discriminator):
     Returns:
         Generator layers attached to discriminator layers.
     """
-    model = Sequential()
-    for layer in generator.layers:
-        model.add(layer)
-    for layer in discriminator.layers:
-        layer.trainable = False
-        model.add(layer)
-    return model
+    
+    model = discriminator(generator.output)
+    model_obj = Model(generator.input, model)
+    return model_obj
 
 
 def stack_gen_encoder(generator, encoder, discriminator):
@@ -258,6 +262,27 @@ def stack_gen_encoder(generator, encoder, discriminator):
     return model
 
 
+#def stack_enc_gen(encoder, generator, discriminator):
+#    """
+#    Combines encoder and generator layers together while freezing the weights of all layers except the last
+#    in the encoder. This is used to train the encoder network to convert image data into a low-dimensional vector
+#     representation.
+#
+#    Args:
+#        encoder: Encoder network
+#        generator: Decoder network
+#        discriminator: Discriminator network. Used to freeze shared layers in encoder
+#    Returns:
+#        Encoder layers attached to generator layers
+#    """
+#    model = generator(encoder.output)
+#    model_obj = Model(encoder.input, model)
+#    generator.trainable = False
+#    for layer in model_obj.layers:
+#        if (layer in discriminator.layers) or (layer in generator.layers):
+#            layer.trainable = False
+#    return model_obj
+
 def stack_enc_gen(encoder, generator, discriminator):
     """
     Combines encoder and generator layers together while freezing the weights of all layers except the last
@@ -271,15 +296,15 @@ def stack_enc_gen(encoder, generator, discriminator):
     Returns:
         Encoder layers attached to generator layers
     """
-    model = Sequential()
-    for layer in encoder.layers:
-        if layer in discriminator.layers:
-            layer.trainable = False
-        model.add(layer)
+    model_in = encoder.input
+    model = model_in
+    for layer in encoder.layers[1:]:
+        model = layer(model)
     for layer in generator.layers:
-        layer.trainable = False
-        model.add(layer)
-    return model
+        model = layer(model)
+    model_obj = Model(model_in, model)
+    return model_obj
+
 
 
 def stack_encoder_gen_disc(encoder, generator, discriminator):
@@ -311,31 +336,54 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
     disc_labels = np.zeros(batch_size, dtype=int)
     gen_labels = np.ones(batch_size, dtype=int)
     batch_vec = np.zeros((batch_size, vec_size))
+    gen_batch_vec = np.zeros((batch_size, vec_size))
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
                 ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Gen_Enc Loss"]
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            disc_labels[:] = batch_labels[:]
+            #disc_labels[:] = batch_labels[:]
             #label_switches = np.random.binomial(1, 0.05, size=(batch_size))
             #disc_labels[label_switches == 1] = 1 - disc_labels[label_switches == 1]
             batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
+            gen_batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
-            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, disc_labels))
+            if b == 1:
+                print(discriminator.summary())
+                print(generator.summary())
+            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
             print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
                                                                                                     epoch, b,
                                                                                                     *disc_loss_history[-1]))
-            gen_loss_history.append(gen_disc.train_on_batch(batch_vec,
+            #discriminator.trainable = False
+            #for layer in discriminator.layers:
+            #    layer.trainable = False
+            if b == 0:
+                print(discriminator.summary())
+                print(gen_disc.summary())
+            gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
                                                             gen_labels))
             print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
                                                                                                         epoch, b,
                                                                                                         *gen_loss_history[-1]))
+            #generator.trainable = False
+            #for layer in generator.layers:
+            #    layer.trainable = False
+            if b == 0:
+                print(generator.summary())
+                print(enc_gen.summary())
             gen_enc_loss_history.append(enc_gen.train_on_batch(combo_data_batch, combo_data_batch))
             print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
                                                                                    epoch, b,
                                                                                    gen_enc_loss_history[-1]))
+            #discriminator.trainable = True
+            #for layer in discriminator.layers:
+            #    layer.trainable = True
+            #generator.trainable = True
+            #for layer in generator.layers:
+            #    layer.trainable = True
             time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch, b))
         if epoch in num_epochs:

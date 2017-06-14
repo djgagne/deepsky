@@ -120,18 +120,34 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
 
                 optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                                 beta_1=gan_params.loc[i, "beta_one"])
+                #disc_optimizer = Adam(lr=2 * gan_params.loc[i, "learning_rate"],
+                #                beta_1=gan_params.loc[i, "beta_one"])
                 gen_model = Model(vec_input, gen)
                 disc_model = Model(image_input, disc)
                 enc_model = Model(image_input, enc)
                 gen_model.compile(optimizer=optimizer, loss="mae")
                 enc_model.compile(optimizer=optimizer, loss="mae")
                 disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                gen_disc = stack_gen_disc(gen_model, disc_model)
-                enc_gen = stack_enc_gen(gen_model, enc_model, disc_model)
-                gen_disc.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                enc_gen.compile(optimizer=optimizer, loss="mae")
+                print("gen model")
+                print(gen_model.summary())
+                print("disc model")
+                print(disc_model.summary())
+                gen_disc_model = stack_gen_disc(gen_model, disc_model)
+                #gen_disc_model = Model(vec_input, gen_disc)
+                gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+                enc_gen_model = stack_enc_gen(enc_model, gen_model, disc_model)
+                #enc_gen_model = Model(image_input, enc_gen)
+                enc_gen_model.compile(optimizer=optimizer, loss="mae")
+                print("gen model")
+                print(gen_model.summary())
+                print("disc model")
+                print(disc_model.summary())
+                print("gen disc model")
+                print(gen_disc_model.summary())
+                print("enc gen model")
+                print(enc_gen_model.summary())
                 history = train_linked_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc_model,
-                                           gen_disc, enc_gen,
+                                           gen_disc_model, enc_gen_model,
                                            int(gan_params.loc[i, "generator_input_size"]),
                                            gan_path, i,
                                            batch_size=int(gan_params.loc[i, "batch_size"]),
