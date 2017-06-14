@@ -234,6 +234,7 @@ def stack_gen_disc(generator, discriminator):
         Generator layers attached to discriminator layers.
     """
     
+    discriminator.trainable = False
     model = discriminator(generator.output)
     model_obj = Model(generator.input, model)
     return model_obj
@@ -299,12 +300,14 @@ def stack_enc_gen(encoder, generator, discriminator):
     model_in = encoder.input
     model = model_in
     for layer in encoder.layers[1:]:
+        if layer in discriminator.layers:
+            layer.trainable = False
         model = layer(model)
     for layer in generator.layers:
+        layer.trainable = False
         model = layer(model)
     model_obj = Model(model_in, model)
     return model_obj
-
 
 
 def stack_encoder_gen_disc(encoder, generator, discriminator):
