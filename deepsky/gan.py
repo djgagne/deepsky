@@ -82,7 +82,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         curr_conv_filters *= 2
     model = Flatten()(model)
     model = Dense(output_size)(model)
-    model = Activation("tanh")(model)
+    model = Activation("linear")(model)
     return model, image_input
 
 
@@ -116,7 +116,7 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         curr_conv_filters *= 2
     model = Flatten()(model)
     enc_model = Dense(output_size)(model)
-    enc_model = Activation("tanh")(enc_model)
+    enc_model = Activation("linear")(enc_model)
     disc_model = Dense(1)(model)
     disc_model = Activation("sigmoid")(disc_model)
     return disc_model, enc_model, image_input
@@ -346,11 +346,10 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            #disc_labels[:] = batch_labels[:]
-            #label_switches = np.random.binomial(1, 0.05, size=(batch_size))
-            #disc_labels[label_switches == 1] = 1 - disc_labels[label_switches == 1]
-            batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
-            gen_batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
+            #batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
+            #gen_batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
+            batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
+            gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
             if b == 1:
