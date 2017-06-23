@@ -457,10 +457,10 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
     combined_loss_history = []
     time_history = []
     current_epoch = []
-    batch_labels = np.zeros(batch_size, dtype=int)
+    batch_labels = np.zeros(batch_size, dtype=np.int32)
     batch_labels[:batch_half] = 1
-    batch_vec = np.zeros((batch_size, vec_size))
-    combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
+    batch_vec = np.zeros((batch_size, vec_size), dtype=np.float32)
+    combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]), dtype=np.float32)
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
                 ["Gen Loss"] + ["Gen " + m for m in metrics] 
     for epoch in range(1, max(num_epochs) + 1):
@@ -570,8 +570,8 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
     encoder_loss_history = []
     time_history = []
     current_epoch = []
-    combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
-    batch_labels = np.zeros(batch_size, dtype=int)
+    combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]), dtype=np.float32)
+    batch_labels = np.zeros(batch_size, dtype=np.int32)
     batch_labels[:batch_half] = 1
     gen_labels = np.ones(batch_size, dtype=int)
     for epoch in range(1, max(num_epochs) + 1):
@@ -654,7 +654,7 @@ def rescale_data(data):
 
 
 def rescale_multivariate_data(data):
-    scaled_data = np.zeros(data.shape)
+    scaled_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
         scaled_data[:, :, :, i] = rescale_data(data[:, :, :, i])
     return scaled_data
@@ -666,7 +666,7 @@ def unscale_data(data, min_val=0, max_val=255):
 
 
 def unscale_multivariate_data(data, min_vals, max_vals):
-    unscaled_data = np.zeros(data.shape)
+    unscaled_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
         unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
                                                  min_vals[i],

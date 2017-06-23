@@ -27,11 +27,18 @@ def main():
         out_dtype = "uint8"
     else:
         data_path = "/scratch/dgagne/ncar_ens_storm_patches/"
-        variable_names = ["composite_reflectivity_entire_atmosphere_prev",
-                          "temperature_2_m_above_ground_prev",
-                          "dew_point_temperature_2_m_above_ground_prev",
-                          "u-component_of_wind_10_m_above_ground_prev",
-                          "v-component_of_wind_10_m_above_ground_prev"]
+        #variable_names = ["composite_reflectivity_entire_atmosphere_prev",
+        #                  "temperature_2_m_above_ground_prev",
+        #                  "dew_point_temperature_2_m_above_ground_prev",
+        #                  "u-component_of_wind_10_m_above_ground_prev",
+        #                  "v-component_of_wind_10_m_above_ground_prev"]
+        variable_names = ['composite_reflectivity_entire_atmosphere_current',
+                  'precipitable_water_entire_atmosphere_(considered_as_a_single_layer)_current',
+                  'geopotential_height_level_of_adiabatic_condensation_from_sfc_prev',
+                  'convective_available_potential_energy_180-0_mb_above_ground_prev',
+                  'vertical_u-component_shear_0-6000_m_above_ground_prev',
+                  'vertical_v-component_shear_0-6000_m_above_ground_prev',
+                  ]
         gan_path = "/scratch/dgagne/storm_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
         out_dtype = "float32"
     gan_params = dict(generator_input_size=[16, 32, 128],
@@ -92,6 +99,8 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
             data = load_tsi_data(data_path, variable_names)
         else:
             data = load_storm_patch_data(data_path, variable_names)
+            for c in [2, 3]:
+                data[:, :, :, c] = np.sqrt(data[:, :, :, c])
         max_vals = data.max(axis=0).max(axis=0).max(axis=0)
         min_vals = data.min(axis=0).min(axis=0).min(axis=0)
         print("Rescaling data {0}".format(gpu_num))
@@ -177,16 +186,39 @@ def load_tsi_data(data_path, variable_names, width=32, r_patch=(100, 100, 150, 1
     return data
 
 
+#def load_storm_patch_data(data_path, variable_names):
+#    data_patches = []
+#    data_files = sorted(glob(join(data_path, "*.nc")))
+#    for data_file in data_files:
+#        print(data_file.split("/")[-1])
+#        ds = xr.open_dataset(data_file)
+#        patch_arr = []
+#        for variable in variable_names:
+#            patch_arr.append(ds[variable].values)
+#        data_patches.append(np.stack(patch_arr, axis=-1))
+#    data = np.vstack(data_patches)
+#    return data
+
+
 def load_storm_patch_data(data_path, variable_names):
     data_patches = []
+    centers = []
+    valid_dates = []
     data_files = sorted(glob(join(data_path, "*.nc")))
     for data_file in data_files:
-        print(data_file.split("/")[-1])
+        print(data_file)
         ds = xr.open_dataset(data_file)
         patch_arr = []
-        for variable in variable_names:
-            patch_arr.append(ds[variable].values)
-        data_patches.append(np.stack(patch_arr, axis=-1))
+        all_vars = list(ds.variables.keys())
+        if np.all(np.in1d(variable_names, all_vars)):
+            centers.append(np.array([ds["longitude"][:, 32, 32], ds["latitude"][:, 32, 32]]).T)
+            valid_dates.append(ds["valid_date"].values)
+            for variable in variable_names:
+                patch_arr.append(ds[variable][:, 16:-16, 16:-16].values)
+            data_patches.append(np.stack(patch_arr, axis=-1))
+        ds.close()
+    center_arr = np.vstack(centers)
+    valid_date_index = pd.DatetimeIndex(np.concatenate(valid_dates))
     data = np.vstack(data_patches)
     return data
 
