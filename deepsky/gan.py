@@ -2,7 +2,7 @@ from __future__ import division
 import numpy as np
 import pandas as pd
 from keras.models import Sequential, Model
-from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D, AlphaDropout
 from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, BatchNormalization
 import xarray as xr
 from os.path import join
@@ -10,7 +10,8 @@ import keras.backend as K
 
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
-                    min_conv_filters=64, output_size=(32, 32, 1), stride=2):
+                    min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="selu",
+                    dropout_alpha=0.2):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -32,17 +33,19 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     vector_input = Input(shape=(input_size, ), name="gen_input")
     model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
-    #model = Activation("elu")(model)
-    #model = BatchNormalization(momentum=0.9)(model)
-    model = LeakyReLU(alpha=0.2)(model)
-    #model = Dropout(0.4)(model)
+    model = Activation(activation)(model)
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, filter_width,
                                   strides=(stride, stride), padding="same")(model)
-        #model = Activation("elu")(model)
-        #model = BatchNormalization(momentum=0.9)(model)
-        model = LeakyReLU(alpha=0.2)(model)
+        if activation == "leaky":
+            model = LeakyReLU(alpha=0.2)(model)
+        else:
+            model = Activation(activation)(model)
+        if activation == "selu":
+            model = AlphaDropout(dropout_alpha)(model)
+        else:
+            model = Dropout(dropout_alpha)(model)
     model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
                               padding="same")(model)
@@ -87,7 +90,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
 
 
 def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
-                       min_conv_filters=64, output_size=100, stride=2):
+                       min_conv_filters=64, output_size=100, stride=2, activation="selu", dropout_alpha=0.2):
     """
     Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -110,9 +113,14 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     for c in range(num_layers):
         model = Conv2D(curr_conv_filters, filter_width,
                        strides=(stride, stride), padding="same")(model)
-        #model = Activation("elu")(model)
-        model = LeakyReLU(alpha=0.2)(model)
-        #model = Dropout(0.4)(model)
+        if activation == "leaky":
+            model = LeakyReLU(0.2)(model)
+        else:
+            model = Activation(activation)(model)
+        if activation == "selu":
+            model = AlphaDropout(dropout_alpha)(model)
+        else:
+            model = Dropout(dropout_alpha)(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     enc_model = Dense(output_size)(model)
