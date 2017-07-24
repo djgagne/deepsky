@@ -10,7 +10,7 @@ def main():
     y = np.arange(height)
     x_grid, y_grid = np.meshgrid(x, y)
     distances = distance_matrix(x_grid, y_grid)
-    length_scales = np.array([30])
+    length_scales = np.array([8])
     rand_gen = random_field_generator(x_grid, y_grid, length_scales)
     rand_fields = [next(rand_gen) for x in range(9)]
     test_distances = np.arange(1, 30)

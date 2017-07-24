@@ -58,6 +58,8 @@ def random_field_generator(x, y, length_scales, spatial_pattern="full"):
     for ls in length_scales:
         correlations.append(exp_kernel(distances, ls))
         cho_matrices.append(cholesky(correlations[-1], lower=True))
+        plt.pcolormesh(np.ma.array(cho_matrices[-1], mask=cho_matrices[-1] == 0))
+        plt.show()
     while True:
         if spatial_pattern == "full":
             scale = np.random.randint(0, len(length_scales))
@@ -79,7 +81,7 @@ def spatial_covariance(distances, z, eval_distances, tolerance):
     z_flat = z.ravel()
     for d, eval_distance in enumerate(eval_distances):
         points_a, points_b = np.where(np.abs(sub_distances - eval_distance) <= tolerance)
-        covariances[d] = np.abs(np.cov(z_flat[points_a], z_flat[points_b])[0, 1])
+        covariances[d] = np.abs(np.corrcoef(z_flat[points_a], z_flat[points_b])[0, 1])
     return covariances
 
 if __name__ == "__main__":
