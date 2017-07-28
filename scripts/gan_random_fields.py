@@ -36,14 +36,14 @@ def main():
     num_gpus = 8
     out_dtype = "float32"
     metrics = ["accuracy", "binary_crossentropy"]
+    if not exists(gan_path):
+        os.mkdir(gan_path)
     gan_param_names = list(gan_params.keys())
     gan_param_combos = pd.DataFrame(list(it.product(*(gan_params[gan_name] for gan_name in gan_param_names))),
                                     columns=gan_param_names)
     gan_param_combos.to_csv(join(gan_path, "gan_param_combos.csv"), index_label="Index")
     pool = Pool(num_gpus)
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
-    if not exists(gan_path):
-        os.mkdir(gan_path)
     for gpu_num in range(num_gpus):
         pool.apply_async(train_gan_config, (gpu_num,
                                             num_epochs,
@@ -71,9 +71,12 @@ def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dty
                                               gan_params.loc[i, "data_width"],
                                               gan_params.loc[i, "length_scale"])
                 scaled_data, scaling_values = rescale_multivariate_data(data)
+                print(data.shape, scaled_data.shape)
                 scaling_values.to_csv(join(gan_path, "scaling_values_{0:03d}.csv".format(i)), index_label="Channel")
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
+                if batch_diff > 0:
+                    scaled_data = scaled_data[:scaled_data.shape[0]-batch_diff]
                 gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
                                                  filter_width=int(gan_params.loc[i, "filter_width"]),
                                                  min_data_width=int(gan_params.loc[i, "min_data_width"]),
@@ -105,7 +108,7 @@ def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dty
                 gen_disc_model = stack_gen_disc(gen_model, disc_model)
                 gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
                 enc_gen_model = stack_enc_gen(enc_model, gen_model, disc_model)
-                enc_gen_model.compile(optimizer=optimizer, loss="mse")
+                enc_gen_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
                 print("gen model")
                 print(gen_model.summary())
                 print("disc model")
@@ -114,7 +117,7 @@ def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dty
                 print(gen_disc_model.summary())
                 print("enc gen model")
                 print(enc_gen_model.summary())
-                history = train_linked_gan(scaled_data[:-batch_diff], gen_model, enc_model, disc_model,
+                history = train_linked_gan(scaled_data, gen_model, enc_model, disc_model,
                                            gen_disc_model, enc_gen_model,
                                            int(gan_params.loc[i, "generator_input_size"]),
                                            gan_path, i,
@@ -134,7 +137,10 @@ def generate_random_fields(set_size, data_width, length_scale_str):
     length_scale_list = length_scale_str.split(";")
     spatial_pattern = length_scale_list[0]
     length_scales = [float(v) for v in length_scale_list[1:]]
-    rand_gen = random_field_generator(data_width, data_width, length_scales, spatial_pattern=spatial_pattern)
+    x = np.arange(data_width)
+    y = np.arange(data_width)
+    x_grid, y_grid = np.meshgrid(x, y)
+    rand_gen = random_field_generator(x_grid, y_grid, length_scales, spatial_pattern=spatial_pattern)
     data = np.stack([next(rand_gen) for i in range(set_size)], axis=0)
     return data
 

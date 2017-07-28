@@ -33,7 +33,10 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     vector_input = Input(shape=(input_size, ), name="gen_input")
     model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
-    model = Activation(activation)(model)
+    if activation == "leaky":
+        model = LeakyReLU(alpha=0.2)(model)
+    else:
+        model = Activation(activation)(model)
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, filter_width,
@@ -350,7 +353,9 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
     gen_batch_vec = np.zeros((batch_size, vec_size))
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
-                ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Gen_Enc Loss"]
+                ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Enc Loss"] + ["Enc " + m for m in ["mse", "mae"]]
+    batch_divs = np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)
+    print(batch_divs, train_data.shape, gan_index)
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
@@ -378,7 +383,7 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             gen_enc_loss_history.append(enc_gen.train_on_batch(combo_data_batch, combo_data_batch))
             print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
                                                                                    epoch, b,
-                                                                                   gen_enc_loss_history[-1]))
+                                                                                   gen_enc_loss_history[-1][0]))
             time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch, b))
         if epoch in num_epochs:
@@ -402,14 +407,19 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                                                                   "complevel": 1}})
             encoder.save(join(gan_path, "gan_encoder_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
         time_history_index = pd.DatetimeIndex(time_history)
+        hist_arr = np.hstack([current_epoch, disc_loss_history,
+                              gen_loss_history, gen_enc_loss_history])
+        print(hist_arr.shape)
+        print(hist_cols)
+        print(len(hist_cols))
         history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
-                                            gen_loss_history, np.array(gen_enc_loss_history).reshape(-1, 1)]),
+                                          gen_loss_history, gen_enc_loss_history]),
                                index=time_history_index, columns=hist_cols)
         history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                       gen_loss_history, 
-                                      np.array(gen_enc_loss_history).reshape(-1, 1)]),
+                                      gen_enc_loss_history]),
                            index=time_history_index, columns=hist_cols)
     history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     return history
@@ -649,7 +659,7 @@ def rescale_data(data, min_val, max_val):
 def rescale_multivariate_data(data):
     normed_data = np.zeros(data.shape, dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
-    scaling_values = pd.DataFrame(np.zeros(data.shape[-1], 5),
+    scaling_values = pd.DataFrame(np.zeros((data.shape[-1], 4), dtype=np.float32),
                                   columns=["mean", "std", "min", "max"])
     for i in range(data.shape[-1]):
         scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
@@ -673,5 +683,5 @@ def unscale_multivariate_data(data, scaling_values):
         unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
                                                  scaling_values.loc[i, "min"],
                                                  scaling_values.loc[i, "max"])
-        unnormed_data[:, :, :, i] = unscaled_data * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
+        unnormed_data[:, :, :, i] = unscaled_data[:, :, :, i] * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
     return unnormed_data

@@ -74,14 +74,14 @@ def random_field_generator(x, y, length_scales, spatial_pattern="full"):
         elif spatial_pattern == "combined":
             yield np.stack([np.dot(cho_matrices[scale],
                                     np.random.normal(size=x.size)).reshape(x.shape[0], x.shape[1])
-                            for scale in range(len(length_scales))], axis=-1).mean(axis=-1)
+                            for scale in range(len(length_scales))], axis=-1).mean(axis=-1).reshape(x.shape[0], x.shape[1], 1)
         elif spatial_pattern == "blended":
             fields = np.stack([np.dot(cho_matrices[scale],
                               np.random.normal(size=x.size)).reshape(x.shape[0], x.shape[1])
                        for scale in range(len(length_scales))], axis=0)
             rows, cols = np.indices(fields[0].shape)
             logistic_cols = 1.0 / (1 + np.exp(-2 * (cols - cols.mean())))
-            yield logistic_cols * fields[0] + (1-logistic_cols) * fields[1]
+            yield (logistic_cols * fields[0] + (1-logistic_cols) * fields[1]).reshape(x.shape[0], x.shape[1], 1)
 
 def spatial_covariance(distances, z, eval_distances, tolerance):
     sub_distances = np.array(distances, copy=True)
