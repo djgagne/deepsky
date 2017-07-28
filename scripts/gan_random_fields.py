@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
-from deepsky.kriging import random_field_generator, spatial_covariance, distance_matrix, exp_kernel, gaussian_kernel
+from deepsky.kriging import random_field_generator, spatial_covariance, distance_matrix, exp_kernel
 from deepsky.gan import generator_model, encoder_disc_model, train_linked_gan, stack_gen_disc, stack_enc_gen
-from deepsky.gan import stack_gen_encoder, rescale_multivariate_data
+from deepsky.gan import rescale_multivariate_data
 import matplotlib.pyplot as plt
 from datetime import datetime
 import itertools as it
@@ -18,7 +18,7 @@ from keras.models import Model
 def main():
     gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
     gan_params = dict(generator_input_size=[16, 32, 128],
-                      filter_width=[3, 5, 7],
+                      filter_width=[5],
                       min_data_width=[4],
                       min_conv_filters=[32, 64, 128],
                       batch_size=[256],
@@ -26,14 +26,14 @@ def main():
                       activation=["relu", "selu", "leaky"],
                       dropout_alpha=[0, 0.05, 0.1],
                       beta_one=[0.5],
-                      data_width=[32, 64],
+                      data_width=[32],
                       train_size=[1024, 16384, 131072, 1048576],
                       length_scale=["full;3", "full;8", "full;3;8", "stacked;3;8;5", "combined;3;8",
                                      "blended;3;8"],
                       seed=[14268489],
                       )
     num_epochs = [1, 2, 3, 4, 5, 8, 10]
-    num_gpus = 7
+    num_gpus = 8
     out_dtype = "float32"
     metrics = ["accuracy", "binary_crossentropy"]
     gan_param_names = list(gan_params.keys())
@@ -71,6 +71,7 @@ def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dty
                                               gan_params.loc[i, "data_width"],
                                               gan_params.loc[i, "length_scale"])
                 scaled_data, scaling_values = rescale_multivariate_data(data)
+                scaling_values.to_csv(join(gan_path, "scaling_values_{0:03d}.csv".format(i)), index_label="Channel")
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
                 gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
@@ -155,7 +156,7 @@ def plot_random_fields():
                                                rand_field,
                                                test_distances, 0.5) for rand_field in rand_fields])
     plt.figure(figsize=(6, 4))
-    #plt.fill_between(test_distances, covariances.max(axis=0), covariances.min(axis=0), color='red', alpha=0.2)
+    # plt.fill_between(test_distances, covariances.max(axis=0), covariances.min(axis=0), color='red', alpha=0.2)
     for cov_inst in covariances:
         plt.plot(test_distances, cov_inst, color='pink', marker='o', ls='-')
     plt.plot(test_distances, covariances.mean(axis=0), 'ro-')

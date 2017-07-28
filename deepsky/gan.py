@@ -360,9 +360,6 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
-            if b == 1:
-                print(discriminator.summary())
-                print(generator.summary())
             disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
             print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
                                                                                                     epoch, b,
@@ -373,8 +370,8 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
                                                             gen_labels))
             print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
-                                                                                                        epoch, b,
-                                                                                                        *gen_loss_history[-1]))
+                                                                                                   epoch, b,
+                                                                                                   *gen_loss_history[-1]))
             if b == 0:
                 print(generator.summary())
                 print(enc_gen.summary())
@@ -388,9 +385,9 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
                                                                  epoch,
                                                                  pd.Timestamp("now")))
-            generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
-            discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
-            gen_noise = np.random.uniform(-1, 1, size=(batch_size, vec_size))
+            generator.save(join(gan_path, "gan_generator_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+            discriminator.save(join(gan_path, "gan_discriminator_{0:04d}_{1:04d}.h5".format(gan_index, epoch)))
+            gen_noise = np.random.normal(size=(batch_size, vec_size))
             gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                                             "y": np.arange(gen_data_epoch.shape[1]),
@@ -399,22 +396,22 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                   dims=("p", "y", "x", "channel"),
                                   attrs={"long_name": "Synthetic data", "units": ""})
             gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
-                                                               "gan_gen_patches_{0:03d}_epoch_{1:03d}.nc".format(
+                                                               "gan_gen_patches_{0:04d}_epoch_{1:03d}.nc".format(
                                                                    gan_index, epoch)),
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
-            encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+            encoder.save(join(gan_path, "gan_encoder_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
         time_history_index = pd.DatetimeIndex(time_history)
         history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                             gen_loss_history, np.array(gen_enc_loss_history).reshape(-1, 1)]),
-                                index=time_history_index, columns=hist_cols)
-        history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+                               index=time_history_index, columns=hist_cols)
+        history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                       gen_loss_history, 
                                       np.array(gen_enc_loss_history).reshape(-1, 1)]),
                            index=time_history_index, columns=hist_cols)
-    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+    history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     return history
 
 

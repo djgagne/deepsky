@@ -110,6 +110,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
         with K.tf.device("/gpu:{0:d}".format(0)):
             for i in gan_params.index.values:
                 print("Starting combo {0:d}".format(i))
+                scaling_values.to_csv(join(gan_path, "scaling_values_{0:03d}.csv".format(i)), index_label="Channel")
                 print(gan_params.loc[i])
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
