@@ -11,7 +11,7 @@ import keras.backend as K
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="selu",
-                    dropout_alpha=0.2):
+                    dropout_alpha=0.05):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -332,8 +332,8 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
 
 
 def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, enc_gen, vec_size, gan_path, gan_index,
-                     metrics=("accuracy", ), batch_size=128, num_epochs=(1, 5, 10), min_vals=(0, 0, 0),
-                     max_vals=(255, 255, 255), out_dtype="uint8"):
+                     metrics=("accuracy", ), batch_size=128, num_epochs=(1, 5, 10), scaling_values=None,
+                     out_dtype="uint8"):
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     train_order = np.arange(train_data.shape[0])
@@ -360,27 +360,18 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
-            if b == 1:
-                print(discriminator.summary())
-                print(generator.summary())
             disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
             print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
                                                                                                     epoch, b,
                                                                                                     *disc_loss_history[-1]))
-            #discriminator.trainable = False
-            #for layer in discriminator.layers:
-            #    layer.trainable = False
             if b == 0:
                 print(discriminator.summary())
                 print(gen_disc.summary())
             gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
                                                             gen_labels))
             print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}, Accuracy: {4:0.5f}".format(gan_index, 
-                                                                                                        epoch, b,
-                                                                                                        *gen_loss_history[-1]))
-            #generator.trainable = False
-            #for layer in generator.layers:
-            #    layer.trainable = False
+                                                                                                   epoch, b,
+                                                                                                   *gen_loss_history[-1]))
             if b == 0:
                 print(generator.summary())
                 print(enc_gen.summary())
@@ -388,22 +379,16 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
                                                                                    epoch, b,
                                                                                    gen_enc_loss_history[-1]))
-            #discriminator.trainable = True
-            #for layer in discriminator.layers:
-            #    layer.trainable = True
-            #generator.trainable = True
-            #for layer in generator.layers:
-            #    layer.trainable = True
             time_history.append(pd.Timestamp("now"))
             current_epoch.append((epoch, b))
         if epoch in num_epochs:
             print("{2} Save Models Combo: {0} Epoch: {1}".format(gan_index,
                                                                  epoch,
                                                                  pd.Timestamp("now")))
-            generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
-            discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
-            gen_noise = np.random.uniform(-1, 1, size=(batch_size, vec_size))
-            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), min_vals, max_vals)
+            generator.save(join(gan_path, "gan_generator_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+            discriminator.save(join(gan_path, "gan_discriminator_{0:04d}_{1:04d}.h5".format(gan_index, epoch)))
+            gen_noise = np.random.normal(size=(batch_size, vec_size))
+            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                                             "y": np.arange(gen_data_epoch.shape[1]),
                                                                             "x": np.arange(gen_data_epoch.shape[2]),
@@ -411,28 +396,28 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                   dims=("p", "y", "x", "channel"),
                                   attrs={"long_name": "Synthetic data", "units": ""})
             gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
-                                                               "gan_gen_patches_{0:03d}_epoch_{1:03d}.nc".format(
+                                                               "gan_gen_patches_{0:04d}_epoch_{1:03d}.nc".format(
                                                                    gan_index, epoch)),
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
-            encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+            encoder.save(join(gan_path, "gan_encoder_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
         time_history_index = pd.DatetimeIndex(time_history)
         history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                             gen_loss_history, np.array(gen_enc_loss_history).reshape(-1, 1)]),
-                                index=time_history_index, columns=hist_cols)
-        history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+                               index=time_history_index, columns=hist_cols)
+        history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                       gen_loss_history, 
                                       np.array(gen_enc_loss_history).reshape(-1, 1)]),
                            index=time_history_index, columns=hist_cols)
-    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+    history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     return history
 
 
 def train_full_gan(train_data, generator, encoder, discriminator, combined_model, vec_size, gan_path, gan_index,
                    metrics=("accuracy", ),
-                   batch_size=128, num_epochs=(1, 5, 10), min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+                   batch_size=128, num_epochs=(1, 5, 10), scaling_values=None,
                    out_dtype="uint8"):
     """
     Train GAN model that contains 3 networks with the discriminator receiving joint information from the generator and
@@ -509,7 +494,7 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
             gen_noise = np.random.uniform(-1, 1, size=(batch_size, vec_size))
-            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), min_vals, max_vals)
+            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
                                                           "x": np.arange(gen_data_epoch.shape[2]),
@@ -535,7 +520,7 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
 def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_size=128, num_epochs=(1, 5, 10),
               gen_optimizer="adam", disc_optimizer="adam", gen_input_size=100,
               gen_loss="binary_crossentropy", disc_loss="binary_crossentropy", metrics=("accuracy", ),
-              encoder=None, encoder_loss="binary_crossentropy", min_vals=(0, 0, 0), max_vals=(255, 255, 255),
+              encoder=None, encoder_loss="binary_crossentropy", scaling_values=None,
               out_dtype="float32"):
     """
     Train generative adversarial network
@@ -617,7 +602,7 @@ def train_gan(train_data, generator, discriminator, gan_path, gan_index, batch_s
             generator.save(join(gan_path, "gan_generator_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:06d}_{1:04d}.h5".format(gan_index, epoch)))
             gen_noise = np.random.uniform(-1, 1, size=(batch_size, gen_input_size))
-            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), min_vals, max_vals)
+            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                           "y": np.arange(gen_data_epoch.shape[1]),
                                                           "x": np.arange(gen_data_epoch.shape[2]),
@@ -656,16 +641,24 @@ def gan_loss(y_true, y_pred):
     return -K.mean(K.log(switched_nonzero))
 
 
-def rescale_data(data):
-    scaled_data = 2 * ((data - data.min()) / (data.max() - data.min())) - 1
+def rescale_data(data, min_val, max_val):
+    scaled_data = 2 * ((data - min_val) / (max_val - min_val)) - 1
     return scaled_data
 
 
 def rescale_multivariate_data(data):
+    normed_data = np.zeros(data.shape, dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
+    scaling_values = pd.DataFrame(np.zeros(data.shape[-1], 5),
+                                  columns=["mean", "std", "min", "max"])
     for i in range(data.shape[-1]):
-        scaled_data[:, :, :, i] = rescale_data(data[:, :, :, i])
-    return scaled_data
+        scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
+        normed_data[:, :, :, i] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
+        scaling_values.loc[i, ["min", "max"]] = [normed_data[:, :, :, i].min(), normed_data[:, :, :, i].max()]
+        scaled_data[:, :, :, i] = rescale_data(data[:, :, :, i],
+                                               scaling_values.loc[i, "min"],
+                                               scaling_values.loc[i, "max"])
+    return scaled_data, scaling_values
 
 
 def unscale_data(data, min_val=0, max_val=255):
@@ -673,10 +666,12 @@ def unscale_data(data, min_val=0, max_val=255):
     return unscaled_data
 
 
-def unscale_multivariate_data(data, min_vals, max_vals):
+def unscale_multivariate_data(data, scaling_values):
     unscaled_data = np.zeros(data.shape, dtype=np.float32)
+    unnormed_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
         unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
-                                                 min_vals[i],
-                                                 max_vals[i])
-    return unscaled_data
+                                                 scaling_values.loc[i, "min"],
+                                                 scaling_values.loc[i, "max"])
+        unnormed_data[:, :, :, i] = unscaled_data * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
+    return unnormed_data

@@ -101,10 +101,8 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
             data = load_storm_patch_data(data_path, variable_names)
             for c in [2, 3]:
                 data[:, :, :, c] = np.sqrt(data[:, :, :, c])
-        max_vals = data.max(axis=0).max(axis=0).max(axis=0)
-        min_vals = data.min(axis=0).min(axis=0).min(axis=0)
         print("Rescaling data {0}".format(gpu_num))
-        scaled_data = rescale_multivariate_data(data)
+        scaled_data, scaling_values = rescale_multivariate_data(data)
         session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True,
                                                                gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                                log_device_placement=False))
@@ -112,6 +110,7 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
         with K.tf.device("/gpu:{0:d}".format(0)):
             for i in gan_params.index.values:
                 print("Starting combo {0:d}".format(i))
+                scaling_values.to_csv(join(gan_path, "scaling_values_{0:03d}.csv".format(i)), index_label="Channel")
                 print(gan_params.loc[i])
                 batch_size = int(gan_params.loc[i, "batch_size"])
                 batch_diff = scaled_data.shape[0] % batch_size
@@ -161,8 +160,8 @@ def evaluate_gan_config(gpu_num, data_path, variable_names, num_epochs, gan_para
                                            gan_path, i,
                                            batch_size=int(gan_params.loc[i, "batch_size"]),
                                            metrics=metrics,
-                                           num_epochs=num_epochs, max_vals=max_vals,
-                                           min_vals=min_vals, out_dtype=out_dtype)
+                                           num_epochs=num_epochs, scaling_values=scaling_values,
+                                           out_dtype=out_dtype)
                 history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(i)), index_label="Time")
     except Exception as e:
         print(traceback.format_exc())
