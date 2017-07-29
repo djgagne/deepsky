@@ -45,7 +45,7 @@ def main():
     pool = Pool(num_gpus)
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
     for gpu_num in range(num_gpus):
-        pool.apply_async(train_gan_config, (gpu_num,
+        pool.apply_async(train_gan_configs, (gpu_num,
                                             num_epochs,
                                             gan_param_combos.iloc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
                                             metrics, gan_path, out_dtype))
@@ -54,7 +54,7 @@ def main():
     return
 
 
-def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dtype):
+def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dtype):
     try:
         os.environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(gpu_num)
         session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True,
@@ -66,71 +66,70 @@ def train_gan_config(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dty
             for c, i in enumerate(gan_params.index.values):
                 np.random.seed(gan_params.loc[i, "seed"])
                 print("Starting combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
-                print(gan_params.loc[i])
-                data = generate_random_fields(gan_params.loc[i, "train_size"],
-                                              gan_params.loc[i, "data_width"],
-                                              gan_params.loc[i, "length_scale"])
-                scaled_data, scaling_values = rescale_multivariate_data(data)
-                print(data.shape, scaled_data.shape)
-                scaling_values.to_csv(join(gan_path, "scaling_values_{0:03d}.csv".format(i)), index_label="Channel")
-                batch_size = int(gan_params.loc[i, "batch_size"])
-                batch_diff = scaled_data.shape[0] % batch_size
-                if batch_diff > 0:
-                    scaled_data = scaled_data[:scaled_data.shape[0]-batch_diff]
-                gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
-                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
-                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                                 output_size=scaled_data.shape[1:],
-                                                 stride=2,
-                                                 activation=gan_params.loc[i, "activation"],
-                                                 dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-                disc, enc, image_input = encoder_disc_model(input_size=scaled_data.shape[1:],
-                                                            filter_width=int(gan_params.loc[i, "filter_width"]),
-                                                            min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                                            min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                                            output_size=int(gan_params.loc[i, "generator_input_size"]),
-                                                            activation=gan_params.loc[i, "activation"],
-                                                            dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-
-                optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
-                                 beta_1=gan_params.loc[i, "beta_one"])
-                gen_model = Model(vec_input, gen)
-                disc_model = Model(image_input, disc)
-                enc_model = Model(image_input, enc)
-                gen_model.compile(optimizer=optimizer, loss="mse")
-                enc_model.compile(optimizer=optimizer, loss="mse")
-                disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                print("gen model")
-                print(gen_model.summary())
-                print("disc model")
-                print(disc_model.summary())
-                gen_disc_model = stack_gen_disc(gen_model, disc_model)
-                gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-                enc_gen_model = stack_enc_gen(enc_model, gen_model, disc_model)
-                enc_gen_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
-                print("gen model")
-                print(gen_model.summary())
-                print("disc model")
-                print(disc_model.summary())
-                print("gen disc model")
-                print(gen_disc_model.summary())
-                print("enc gen model")
-                print(enc_gen_model.summary())
-                history = train_linked_gan(scaled_data, gen_model, enc_model, disc_model,
-                                           gen_disc_model, enc_gen_model,
-                                           int(gan_params.loc[i, "generator_input_size"]),
-                                           gan_path, i,
-                                           batch_size=int(gan_params.loc[i, "batch_size"]),
-                                           metrics=metrics,
-                                           num_epochs=num_epochs, scaling_values=scaling_values,
-                                           out_dtype=out_dtype)
-                history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(i)), index_label="Time")
-
+                train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype)
     except Exception as e:
         print(traceback.format_exc())
         raise e
     return
+
+
+def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
+    print(gan_params.loc[i])
+    data = generate_random_fields(gan_params.loc[i, "train_size"],
+                                    gan_params.loc[i, "data_width"],
+                                    gan_params.loc[i, "length_scale"])
+    scaled_data, scaling_values = rescale_multivariate_data(data)
+    scaling_values.to_csv(join(gan_path, "scaling_values_{0:04d}.csv".format(i)), index_label="Channel")
+    batch_size = int(gan_params.loc[i, "batch_size"])
+    batch_diff = scaled_data.shape[0] % batch_size
+    if batch_diff > 0:
+        scaled_data = scaled_data[:scaled_data.shape[0]-batch_diff]
+    gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
+                                        filter_width=int(gan_params.loc[i, "filter_width"]),
+                                        min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                        output_size=scaled_data.shape[1:],
+                                        stride=2,
+                                        activation=gan_params.loc[i, "activation"],
+                                        dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
+    disc, enc, image_input = encoder_disc_model(input_size=scaled_data.shape[1:],
+                                                filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                output_size=int(gan_params.loc[i, "generator_input_size"]),
+                                                activation=gan_params.loc[i, "activation"],
+                                                dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
+
+    optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
+                        beta_1=gan_params.loc[i, "beta_one"])
+    gen_model = Model(vec_input, gen)
+    disc_model = Model(image_input, disc)
+    enc_model = Model(image_input, enc)
+    gen_model.compile(optimizer=optimizer, loss="mse")
+    enc_model.compile(optimizer=optimizer, loss="mse")
+    disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+    gen_disc_model = stack_gen_disc(gen_model, disc_model)
+    gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+    enc_gen_model = stack_enc_gen(enc_model, gen_model, disc_model)
+    enc_gen_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
+    print("gen model")
+    print(gen_model.summary())
+    print("disc model")
+    print(disc_model.summary())
+    print("gen disc model")
+    print(gen_disc_model.summary())
+    print("enc gen model")
+    print(enc_gen_model.summary())
+    train_linked_gan(scaled_data, gen_model, enc_model, disc_model,
+                                gen_disc_model, enc_gen_model,
+                                int(gan_params.loc[i, "generator_input_size"]),
+                                gan_path, i,
+                                batch_size=int(gan_params.loc[i, "batch_size"]),
+                                metrics=metrics,
+                                num_epochs=num_epochs, scaling_values=scaling_values,
+                                out_dtype=out_dtype)
+    del data
+    del scaled_data
 
 
 def generate_random_fields(set_size, data_width, length_scale_str):

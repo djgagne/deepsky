@@ -401,7 +401,7 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                   dims=("p", "y", "x", "channel"),
                                   attrs={"long_name": "Synthetic data", "units": ""})
             gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
-                                                               "gan_gen_patches_{0:04d}_epoch_{1:03d}.nc".format(
+                                                               "gan_gen_patches_{0:04d}_epoch_{1:04d}.nc".format(
                                                                    gan_index, epoch)),
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
@@ -422,7 +422,6 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                       gen_enc_loss_history]),
                            index=time_history_index, columns=hist_cols)
     history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
-    return history
 
 
 def train_full_gan(train_data, generator, encoder, discriminator, combined_model, vec_size, gan_path, gan_index,
@@ -512,18 +511,18 @@ def train_full_gan(train_data, generator, encoder, discriminator, combined_model
                                   dims=("p", "y", "x", "channel"),
                                   attrs={"long_name": "Synthetic data", "units": ""})
             gen_da.to_dataset(name="gen_patch").to_netcdf(join(gan_path,
-                                                               "gan_gen_patches_{0:03d}_epoch_{1:03d}.nc".format(gan_index, epoch)),
+                                                               "gan_gen_patches_{0:04d}_epoch_{1:03d}.nc".format(gan_index, epoch)),
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
             encoder.save(join(gan_path, "gan_encoder_{0:06d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             time_history_index = pd.DatetimeIndex(time_history)
             history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
                                    index=time_history_index, columns=hist_cols)
-            history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+            history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     time_history_index = pd.DatetimeIndex(time_history)
     history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history, combined_loss_history]),
                            index=time_history_index, columns=hist_cols)
-    history.to_csv(join(gan_path, "gan_loss_history_{0:03d}.csv".format(gan_index)), index_label="Time")
+    history.to_csv(join(gan_path, "gan_loss_history_{0:04d}.csv".format(gan_index)), index_label="Time")
     return
 
 
@@ -657,15 +656,15 @@ def rescale_data(data, min_val, max_val):
 
 
 def rescale_multivariate_data(data):
-    normed_data = np.zeros(data.shape, dtype=np.float32)
+    normed_data = np.zeros(data.shape[:-1], dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
     scaling_values = pd.DataFrame(np.zeros((data.shape[-1], 4), dtype=np.float32),
                                   columns=["mean", "std", "min", "max"])
     for i in range(data.shape[-1]):
         scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
-        normed_data[:, :, :, i] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
-        scaling_values.loc[i, ["min", "max"]] = [normed_data[:, :, :, i].min(), normed_data[:, :, :, i].max()]
-        scaled_data[:, :, :, i] = rescale_data(data[:, :, :, i],
+        normed_data[:] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
+        scaling_values.loc[i, ["min", "max"]] = [normed_data.min(), normed_data.max()]
+        scaled_data[:, :, :, i] = rescale_data(normed_data,
                                                scaling_values.loc[i, "min"],
                                                scaling_values.loc[i, "max"])
     return scaled_data, scaling_values
@@ -677,11 +676,11 @@ def unscale_data(data, min_val=0, max_val=255):
 
 
 def unscale_multivariate_data(data, scaling_values):
-    unscaled_data = np.zeros(data.shape, dtype=np.float32)
+    unscaled_data = np.zeros(data.shape[:-1], dtype=np.float32)
     unnormed_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
-        unscaled_data[:, :, :, i] = unscale_data(data[:, :, :, i],
-                                                 scaling_values.loc[i, "min"],
-                                                 scaling_values.loc[i, "max"])
-        unnormed_data[:, :, :, i] = unscaled_data[:, :, :, i] * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
+        unscaled_data[:] = unscale_data(data[:, :, :, i],
+                                        scaling_values.loc[i, "min"],
+                                        scaling_values.loc[i, "max"])
+        unnormed_data[:, :, :, i] = unscaled_data * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
     return unnormed_data
