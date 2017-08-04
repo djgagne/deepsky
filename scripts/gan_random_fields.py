@@ -16,9 +16,10 @@ from keras.models import Model
 
 
 def main():
-    gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
+    #gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
+    gan_path = "/scratch/dgagne/random_gan_{0}".format("20170801")
     gan_params = dict(generator_input_size=[16, 32, 128],
-                      filter_width=[5],
+                      filter_width=[3, 5],
                       min_data_width=[4],
                       min_conv_filters=[32, 64, 128],
                       batch_size=[256],
@@ -27,7 +28,7 @@ def main():
                       dropout_alpha=[0, 0.05, 0.1],
                       beta_one=[0.5],
                       data_width=[32],
-                      train_size=[1024, 16384, 131072, 1048576],
+                      train_size=[16384, 131072],
                       length_scale=["full;3", "full;8", "full;3;8", "stacked;3;8;5", "combined;3;8",
                                      "blended;3;8"],
                       seed=[14268489],
@@ -38,7 +39,7 @@ def main():
     metrics = ["accuracy", "binary_crossentropy"]
     if not exists(gan_path):
         os.mkdir(gan_path)
-    gan_param_names = list(gan_params.keys())
+    gan_param_names = sorted(list(gan_params.keys()))
     gan_param_combos = pd.DataFrame(list(it.product(*(gan_params[gan_name] for gan_name in gan_param_names))),
                                     columns=gan_param_names)
     gan_param_combos.to_csv(join(gan_path, "gan_param_combos.csv"), index_label="Index")
@@ -64,9 +65,11 @@ def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dt
         num_combos = gan_params.shape[0]
         with K.tf.device("/gpu:{0:d}".format(0)):
             for c, i in enumerate(gan_params.index.values):
-                np.random.seed(gan_params.loc[i, "seed"])
-                print("Starting combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
-                train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype)
+                if not exists(join(gan_path, "gan_gen_patches_{0:04d}_epoch_0010.nc".format(i))):
+                    print("Starting combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
+                    train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype)
+                else:
+                    print("Already trained combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
     except Exception as e:
         print(traceback.format_exc())
         raise e
@@ -75,24 +78,26 @@ def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dt
 
 def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     print(gan_params.loc[i])
-    data = generate_random_fields(gan_params.loc[i, "train_size"],
-                                    gan_params.loc[i, "data_width"],
-                                    gan_params.loc[i, "length_scale"])
-    scaled_data, scaling_values = rescale_multivariate_data(data)
+    np.random.seed(gan_params.loc[i, "seed"])
+    data, scaling_values = rescale_multivariate_data(generate_random_fields(gan_params.loc[i, "train_size"],
+                                                                            gan_params.loc[i, "data_width"],
+                                                                            gan_params.loc[i, "length_scale"]))
     scaling_values.to_csv(join(gan_path, "scaling_values_{0:04d}.csv".format(i)), index_label="Channel")
+    batches_per_epoch = int(gan_params.loc[i, "train_size"] / gan_params.loc[i, "batch_size"])
     batch_size = int(gan_params.loc[i, "batch_size"])
-    batch_diff = scaled_data.shape[0] % batch_size
+    batch_diff = data.shape[0] % batch_size
+    #batch_seeds = np.random.randint(0, 1000000, size=batches_per_epoch)
     if batch_diff > 0:
-        scaled_data = scaled_data[:scaled_data.shape[0]-batch_diff]
+        data = data[:data.shape[0]-batch_diff]
     gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
                                         filter_width=int(gan_params.loc[i, "filter_width"]),
                                         min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                         min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                        output_size=scaled_data.shape[1:],
+                                        output_size=data.shape[1:],
                                         stride=2,
                                         activation=gan_params.loc[i, "activation"],
                                         dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-    disc, enc, image_input = encoder_disc_model(input_size=scaled_data.shape[1:],
+    disc, enc, image_input = encoder_disc_model(input_size=data.shape[1:],
                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
@@ -120,7 +125,7 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     print(gen_disc_model.summary())
     print("enc gen model")
     print(enc_gen_model.summary())
-    train_linked_gan(scaled_data, gen_model, enc_model, disc_model,
+    train_linked_gan(data, gen_model, enc_model, disc_model,
                                 gen_disc_model, enc_gen_model,
                                 int(gan_params.loc[i, "generator_input_size"]),
                                 gan_path, i,
@@ -129,8 +134,6 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
                                 num_epochs=num_epochs, scaling_values=scaling_values,
                                 out_dtype=out_dtype)
     del data
-    del scaled_data
-
 
 def generate_random_fields(set_size, data_width, length_scale_str):
     length_scale_list = length_scale_str.split(";")

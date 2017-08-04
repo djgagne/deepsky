@@ -658,15 +658,17 @@ def rescale_data(data, min_val, max_val):
 def rescale_multivariate_data(data):
     normed_data = np.zeros(data.shape[:-1], dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
-    scaling_values = pd.DataFrame(np.zeros((data.shape[-1], 4), dtype=np.float32),
-                                  columns=["mean", "std", "min", "max"])
+    scale_cols = ["mean", "std", "min", "max", "max_mag"]
+    scaling_values = pd.DataFrame(np.zeros((data.shape[-1], len(scale_cols)), dtype=np.float32),
+                                  columns=scale_cols)
     for i in range(data.shape[-1]):
         scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
         normed_data[:] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
         scaling_values.loc[i, ["min", "max"]] = [normed_data.min(), normed_data.max()]
+        scaling_values.loc[i, "max_mag"] = np.max(np.abs(scaling_values.loc[i, ["min", "max"]]))
         scaled_data[:, :, :, i] = rescale_data(normed_data,
-                                               scaling_values.loc[i, "min"],
-                                               scaling_values.loc[i, "max"])
+                                               -scaling_values.loc[i, "max_mag"],
+                                               scaling_values.loc[i, "max_mag"])
     return scaled_data, scaling_values
 
 
@@ -680,7 +682,7 @@ def unscale_multivariate_data(data, scaling_values):
     unnormed_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
         unscaled_data[:] = unscale_data(data[:, :, :, i],
-                                        scaling_values.loc[i, "min"],
-                                        scaling_values.loc[i, "max"])
+                                        -scaling_values.loc[i, "max_mag"],
+                                        scaling_values.loc[i, "max_mag"])
         unnormed_data[:, :, :, i] = unscaled_data * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
     return unnormed_data
