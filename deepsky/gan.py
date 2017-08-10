@@ -651,11 +651,31 @@ def gan_loss(y_true, y_pred):
 
 
 def rescale_data(data, min_val, max_val):
+    """
+    Rescale data from -1 to 1 based on specified minimum and maximum values.
+
+    Args:
+        data: array of data
+        min_val: minimum value
+        max_val: maximum values
+
+    Returns:
+
+    """
     scaled_data = 2 * ((data - min_val) / (max_val - min_val)) - 1
     return scaled_data
 
 
 def rescale_multivariate_data(data):
+    """
+    Converts raw data into normalized values for each channel and then rescales the values from -1 to 1.
+
+    Args:
+        data: ndarray of shape (examples, y, x, variable)
+
+    Returns:
+        Normalized data, values used for scaling
+    """
     normed_data = np.zeros(data.shape[:-1], dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
     scale_cols = ["mean", "std", "min", "max", "max_mag"]
@@ -673,11 +693,32 @@ def rescale_multivariate_data(data):
 
 
 def unscale_data(data, min_val=0, max_val=255):
+    """
+    Scale data ranging from -1 to 1 back to its original range.
+
+    Args:
+        data:
+        min_val:
+        max_val:
+
+    Returns:
+
+    """
     unscaled_data = (data + 1) / 2 * (max_val - min_val) + min_val
     return unscaled_data
 
 
 def unscale_multivariate_data(data, scaling_values):
+    """
+    Scale data ranging from -1 to 1 back to its original values.
+
+    Args:
+        data:
+        scaling_values:
+
+    Returns:
+
+    """
     unscaled_data = np.zeros(data.shape[:-1], dtype=np.float32)
     unnormed_data = np.zeros(data.shape, dtype=np.float32)
     for i in range(data.shape[-1]):
