@@ -1,10 +1,9 @@
 import numpy as np
 import pandas as pd
 from deepsky.kriging import random_field_generator, spatial_covariance, distance_matrix, exp_kernel
-from deepsky.gan import generator_model, encoder_disc_model, train_linked_gan, stack_gen_disc, stack_enc_gen
-from deepsky.gan import rescale_multivariate_data
+from deepsky.gan import generator_model, encoder_disc_model, train_linked_gan, stack_gen_disc, stack_gen_enc
+from deepsky.gan import normalize_multivariate_data, encoder_model
 import matplotlib.pyplot as plt
-from datetime import datetime
 import itertools as it
 from os.path import join, exists
 import os
@@ -13,11 +12,27 @@ import traceback
 import keras.backend.tensorflow_backend as K
 from keras.optimizers import Adam
 from keras.models import Model
+from datetime import datetime
 
 
 def main():
-    #gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
-    gan_path = "/scratch/dgagne/random_gan_{0}".format("20170801")
+    gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
+    #gan_path = "/scratch/dgagne/random_gan_{0}".format("20170801")
+    # gan_params = dict(generator_input_size=[16, 32, 128],
+    #                   filter_width=[3, 5],
+    #                   min_data_width=[4],
+    #                   min_conv_filters=[32, 64, 128],
+    #                   batch_size=[256],
+    #                   learning_rate=[0.0001],
+    #                   activation=["relu", "selu", "leaky"],
+    #                   dropout_alpha=[0, 0.05, 0.1],
+    #                   beta_one=[0.5],
+    #                   data_width=[32],
+    #                   train_size=[16384, 131072],
+    #                   length_scale=["full;3", "full;8", "full;3;8", "stacked;3;8;5", "combined;3;8",
+    #                                  "blended;3;8"],
+    #                   seed=[14268489],
+    #                   )
     gan_params = dict(generator_input_size=[16, 32, 128],
                       filter_width=[3, 5],
                       min_data_width=[4],
@@ -25,12 +40,13 @@ def main():
                       batch_size=[256],
                       learning_rate=[0.0001],
                       activation=["relu", "selu", "leaky"],
+                      output_activation=["linear"],
                       dropout_alpha=[0, 0.05, 0.1],
                       beta_one=[0.5],
                       data_width=[32],
-                      train_size=[16384, 131072],
+                      train_size=[131072],
                       length_scale=["full;3", "full;8", "full;3;8", "stacked;3;8;5", "combined;3;8",
-                                     "blended;3;8"],
+                                    "blended;3;8"],
                       seed=[14268489],
                       )
     num_epochs = [1, 2, 3, 4, 5, 8, 10]
@@ -47,9 +63,9 @@ def main():
     combo_ind = np.linspace(0, gan_param_combos.shape[0], num_gpus + 1).astype(int)
     for gpu_num in range(num_gpus):
         pool.apply_async(train_gan_configs, (gpu_num,
-                                            num_epochs,
-                                            gan_param_combos.iloc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
-                                            metrics, gan_path, out_dtype))
+                                             num_epochs,
+                                             gan_param_combos.iloc[combo_ind[gpu_num]:combo_ind[gpu_num + 1]],
+                                             metrics, gan_path, out_dtype))
     pool.close()
     pool.join()
     return
@@ -65,7 +81,7 @@ def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dt
         num_combos = gan_params.shape[0]
         with K.tf.device("/gpu:{0:d}".format(0)):
             for c, i in enumerate(gan_params.index.values):
-                if not exists(join(gan_path, "gan_gen_patches_{0:04d}_epoch_0010.nc".format(i))):
+                if not exists(join(gan_path, "gan_gen_patches_{0:04d}_epoch_{1:04d}.nc".format(i, num_epochs[-1]))):
                     print("Starting combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
                     train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype)
                 else:
@@ -79,44 +95,55 @@ def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dt
 def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     print(gan_params.loc[i])
     np.random.seed(gan_params.loc[i, "seed"])
-    data, scaling_values = rescale_multivariate_data(generate_random_fields(gan_params.loc[i, "train_size"],
-                                                                            gan_params.loc[i, "data_width"],
-                                                                            gan_params.loc[i, "length_scale"]))
+    data, scaling_values = normalize_multivariate_data(generate_random_fields(gan_params.loc[i, "train_size"],
+                                                                              gan_params.loc[i, "data_width"],
+                                                                              gan_params.loc[i, "length_scale"]))
     scaling_values.to_csv(join(gan_path, "scaling_values_{0:04d}.csv".format(i)), index_label="Channel")
-    batches_per_epoch = int(gan_params.loc[i, "train_size"] / gan_params.loc[i, "batch_size"])
+    # batches_per_epoch = int(gan_params.loc[i, "train_size"] / gan_params.loc[i, "batch_size"])
     batch_size = int(gan_params.loc[i, "batch_size"])
     batch_diff = data.shape[0] % batch_size
-    #batch_seeds = np.random.randint(0, 1000000, size=batches_per_epoch)
+    # batch_seeds = np.random.randint(0, 1000000, size=batches_per_epoch)
     if batch_diff > 0:
         data = data[:data.shape[0]-batch_diff]
     gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
-                                        filter_width=int(gan_params.loc[i, "filter_width"]),
-                                        min_data_width=int(gan_params.loc[i, "min_data_width"]),
-                                        min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
-                                        output_size=data.shape[1:],
-                                        stride=2,
-                                        activation=gan_params.loc[i, "activation"],
-                                        dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
+                                     filter_width=int(gan_params.loc[i, "filter_width"]),
+                                     min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                     min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                     output_size=data.shape[1:],
+                                     stride=2,
+                                     activation=gan_params.loc[i, "activation"],
+                                     output_activation=gan_params.loc[i, "output_activation"],
+                                     dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
     disc, enc, image_input = encoder_disc_model(input_size=data.shape[1:],
                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                                 output_size=int(gan_params.loc[i, "generator_input_size"]),
                                                 activation=gan_params.loc[i, "activation"],
+                                                encoder_output_activation=gan_params.loc[i, "output_activation"],
                                                 dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-
+    ind_enc, ind_enc_image_input = encoder_model(input_size=data.shape[1:],
+                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
+                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
+                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
+                                                 output_size=int(gan_params.loc[i, "generator_input_size"]),
+                                                 activation=gan_params.loc[i, "activation"],
+                                                 output_activation=gan_params.loc[i, "output_activation"],
+                                                 dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
     optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
-                        beta_1=gan_params.loc[i, "beta_one"])
+                     beta_1=gan_params.loc[i, "beta_one"])
     gen_model = Model(vec_input, gen)
     disc_model = Model(image_input, disc)
     enc_model = Model(image_input, enc)
+    ind_enc_model = Model(ind_enc_image_input, ind_enc)
     gen_model.compile(optimizer=optimizer, loss="mse")
     enc_model.compile(optimizer=optimizer, loss="mse")
     disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+    ind_enc_model.compile(optimizer=optimizer, loss="mse", metrics=metrics)
     gen_disc_model = stack_gen_disc(gen_model, disc_model)
     gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-    enc_gen_model = stack_enc_gen(enc_model, gen_model, disc_model)
-    enc_gen_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
+    gen_enc_model = stack_gen_enc(gen_disc_model, enc_model, disc_model)
+    gen_enc_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
     print("gen model")
     print(gen_model.summary())
     print("disc model")
@@ -124,16 +151,15 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     print("gen disc model")
     print(gen_disc_model.summary())
     print("enc gen model")
-    print(enc_gen_model.summary())
+    print(gen_enc_model.summary())
     train_linked_gan(data, gen_model, enc_model, disc_model,
-                                gen_disc_model, enc_gen_model,
-                                int(gan_params.loc[i, "generator_input_size"]),
-                                gan_path, i,
-                                batch_size=int(gan_params.loc[i, "batch_size"]),
-                                metrics=metrics,
-                                num_epochs=num_epochs, scaling_values=scaling_values,
-                                out_dtype=out_dtype)
+                     gen_disc_model, gen_enc_model,
+                     int(gan_params.loc[i, "generator_input_size"]),
+                     gan_path, i, batch_size=int(gan_params.loc[i, "batch_size"]),
+                     metrics=metrics, num_epochs=num_epochs, scaling_values=scaling_values,
+                     out_dtype=out_dtype)
     del data
+
 
 def generate_random_fields(set_size, data_width, length_scale_str):
     length_scale_list = length_scale_str.split(";")
