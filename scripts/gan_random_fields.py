@@ -142,7 +142,7 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     ind_enc_model.compile(optimizer=optimizer, loss="mse", metrics=metrics)
     gen_disc_model = stack_gen_disc(gen_model, disc_model)
     gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-    gen_enc_model = stack_gen_enc(gen_disc_model, enc_model, disc_model)
+    gen_enc_model = stack_gen_enc(gen_model, enc_model, disc_model)
     gen_enc_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
     print("gen model")
     print(gen_model.summary())
