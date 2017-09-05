@@ -80,7 +80,7 @@ def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dt
     try:
         os.environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(gpu_num)
         session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
-                                                       intra_op_parallelism_threads=14,
+                                                       intra_op_parallelism_threads=100,
                                                        inter_op_parallelism_threads=1,
                                                        gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                        log_device_placement=True))

@@ -337,6 +337,7 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
 def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, enc_gen, vec_size, gan_path, gan_index,
                      metrics=("accuracy", ), batch_size=128, num_epochs=(1, 5, 10), scaling_values=None,
                      out_dtype="uint8"):
+    print("Starting training")
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     train_order = np.arange(train_data.shape[0])
@@ -666,7 +667,7 @@ def rescale_data(data, min_val, max_val):
     return scaled_data
 
 
-def rescale_multivariate_data(data):
+def rescale_multivariate_data(data, scaling_values=None):
     """
     Converts raw data into normalized values for each channel and then rescales the values from -1 to 1.
 
@@ -679,13 +680,18 @@ def rescale_multivariate_data(data):
     normed_data = np.zeros(data.shape[:-1], dtype=np.float32)
     scaled_data = np.zeros(data.shape, dtype=np.float32)
     scale_cols = ["mean", "std", "min", "max", "max_mag"]
-    scaling_values = pd.DataFrame(np.zeros((data.shape[-1], len(scale_cols)), dtype=np.float32),
-                                  columns=scale_cols)
+    set_scale = False
+    if scaling_values is None:
+        scaling_values = pd.DataFrame(np.zeros((data.shape[-1], len(scale_cols)), dtype=np.float32),
+                                      columns=scale_cols)
+        set_scale = True
     for i in range(data.shape[-1]):
-        scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
+        if set_scale:
+            scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
         normed_data[:] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
-        scaling_values.loc[i, ["min", "max"]] = [normed_data.min(), normed_data.max()]
-        scaling_values.loc[i, "max_mag"] = np.max(np.abs(scaling_values.loc[i, ["min", "max"]]))
+        if set_scale:
+            scaling_values.loc[i, ["min", "max"]] = [normed_data.min(), normed_data.max()]
+            scaling_values.loc[i, "max_mag"] = np.max(np.abs(scaling_values.loc[i, ["min", "max"]]))
         scaled_data[:, :, :, i] = rescale_data(normed_data,
                                                -scaling_values.loc[i, "max_mag"],
                                                scaling_values.loc[i, "max_mag"])
