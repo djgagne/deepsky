@@ -10,8 +10,8 @@ import keras.backend as K
 
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
-                    min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="selu",
-                    dropout_alpha=0.05):
+                    min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="relu",
+                    output_activation="linear", dropout_alpha=0):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -23,9 +23,11 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
         min_conv_filters (int): Number of convolutional filters in the last convolutional layer
         output_size (tuple of size 3): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
-
+        activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
+        output_activation (str): Type of activation used on the output layer
+        dropout_alpha (float): proportion of nodes dropped out
     Returns:
-        Keras convolutional neural network.
+        Model output graph, model input
     """
     num_layers = int(np.log2(output_size[0]) - np.log2(min_data_width))
     max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
@@ -52,12 +54,13 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
                               padding="same")(model)
-    model = Activation("tanh")(model)
+    model = Activation(output_activation)(model)
     return model, vector_input
 
 
 def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
-                    min_conv_filters=64, output_size=100, stride=2):
+                  min_conv_filters=64, output_size=100, stride=2, activation="relu", output_activation="linear",
+                  dropout_alpha=0):
     """
     Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -69,7 +72,9 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         min_conv_filters (int): Number of convolutional filters in the first convolutional layer
         output_size (int): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
-
+        activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
+        output_activation (str): Type of activation used on the output layer
+        dropout_alpha (float): Proportion of nodes dropped out during training.
     Returns:
         Keras convolutional neural network.
     """
@@ -84,19 +89,29 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         else:
             model = Conv2D(curr_conv_filters, filter_width,
                            strides=(stride, stride), padding="same")(model)
-        model = Activation("elu")(model)
+        if activation == "leaky":
+            model = LeakyReLU(alpha=0.2)(model)
+        else:
+            model = Activation(activation)(model)
+        if activation == "selu":
+            model = AlphaDropout(dropout_alpha)(model)
+        else:
+            model = Dropout(dropout_alpha)(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     model = Dense(output_size)(model)
-    model = Activation("linear")(model)
+    model = Activation(output_activation)(model)
     return model, image_input
 
 
 def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
-                       min_conv_filters=64, output_size=100, stride=2, activation="selu", dropout_alpha=0.2):
+                       min_conv_filters=64, output_size=100, stride=2, activation="relu",
+                       encoder_output_activation="linear",
+                       dropout_alpha=0):
     """
-    Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
-    allow aspects of the structure of the generator to be tuned for optimal performance.
+    Creates an encoder/discriminator convolutional neural network that reproduces the generator input vector.
+    The keyword arguments allow aspects of the structure of the enocder/discriminator to be tuned
+    for optimal performance.
 
     Args:
         input_size (tuple of ints): Number of nodes in the input layer.
@@ -105,9 +120,11 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         min_conv_filters (int): Number of convolutional filters in the first convolutional layer
         output_size (int): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
-
+        activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
+        encoder_output_activation (str): Type of activation used on the output layer
+        dropout_alpha (float): Proportion of nodes dropped out during training.
     Returns:
-        Keras convolutional neural network.
+        discriminator model output, encoder model output, image input
     """
     num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
@@ -126,45 +143,58 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
             model = Dropout(dropout_alpha)(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
-    enc_model = Dense(output_size)(model)
-    enc_model = Activation("linear")(enc_model)
+    enc_model = Dense(int(0.5 * curr_conv_filters * filter_width ** 2))(model)
+    if activation == "leaky":
+        enc_model = LeakyReLU(0.2)(enc_model)
+    else:
+        enc_model = Activation(activation)(enc_model)
+    enc_model = Dense(output_size)(enc_model)
+    enc_model = Activation(encoder_output_activation)(enc_model)
     disc_model = Dense(1)(model)
     disc_model = Activation("sigmoid")(disc_model)
     return disc_model, enc_model, image_input
 
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
-                        min_conv_filters=64, min_data_width=4, leaky_relu_alpha=0.2):
+                        min_conv_filters=64, min_data_width=4, activation="relu",
+                        dropout_alpha=0):
     """
-    Creates a discriminator model for a generative adversarial network.
+    Creates an discriminator convolutional neural network that reproduces the generator input vector.
+    The keyword arguments allow aspects of the structure of the discriminator to be tuned for optimal performance.
 
     Args:
-        input_size (tuple of size 3): Dimensions of input data
-        stride (int): Number of pixels the convolution filter is shifted between operations
-        filter_width (int): Width of convolution filters
-        min_conv_filters (int): Number of convolution filters in the first layer. Doubles in each subsequent layer
-        min_data_width (int): Smallest width of input data after convolution downsampling before flattening
-        leaky_relu_alpha (float): scaling coefficient for negative values in Leaky Rectified Linear Unit
-
+        input_size (tuple of ints): Number of nodes in the input layer.
+        filter_width (int): Width of each convolutional filter
+        min_data_width (int): Width of the last convolved layer
+        min_conv_filters (int): Number of convolutional filters in the first convolutional layer
+        output_size (int): Dimensions of the output
+        stride (int): Number of pixels that the convolution filter shifts between operations.
+        activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
+        encoder_output_activation (str): Type of activation used on the output layer
+        dropout_alpha (float): Proportion of nodes dropped out during training.
     Returns:
-        Keras generator model
+        discriminator model output, encoder model output, image input
     """
     num_layers = int(np.log2(input_size[0]) - np.log2(min_data_width))
     curr_conv_filters = min_conv_filters
-    model = Sequential()
+    image_input = Input(shape=input_size, name="enc_input")
+    model = image_input
     for c in range(num_layers):
-        if c == 0:
-            model.add(Conv2D(curr_conv_filters, filter_width, input_shape=input_size,
-                             strides=(stride, stride), padding="same"))
+        model = Conv2D(curr_conv_filters, filter_width,
+                       strides=(stride, stride), padding="same")(model)
+        if activation == "leaky":
+            model = LeakyReLU(0.2)(model)
         else:
-            model.add(Conv2D(curr_conv_filters, filter_width,
-                             strides=(stride, stride), padding="same"))
-        model.add(LeakyReLU(alpha=leaky_relu_alpha))
+            model = Activation(activation)(model)
+        if activation == "selu":
+            model = AlphaDropout(dropout_alpha)(model)
+        else:
+            model = Dropout(dropout_alpha)(model)
         curr_conv_filters *= 2
-    model.add(Flatten())
-    model.add(Dense(1))
-    model.add(Activation("sigmoid"))
-    return model
+    model = Flatten()(model)
+    disc_model = Dense(1)(model)
+    disc_model = Activation("sigmoid")(disc_model)
+    return disc_model, image_input
 
 
 def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, stride=2, filter_width=5,
@@ -251,7 +281,7 @@ def stack_gen_disc(generator, discriminator):
     return model_obj
 
 
-def stack_gen_encoder(generator, encoder, discriminator):
+def stack_gen_enc(generator, encoder, discriminator):
     """
     Combines generator and encoder layers together while freezing the weights of the generator layers.
     This is used to train the encoder network to convert image data into a low-dimensional vector
@@ -263,37 +293,18 @@ def stack_gen_encoder(generator, encoder, discriminator):
     Returns:
         Encoder layers attached to generator layers
     """
-    model = Sequential()
+    model_in = generator.input
+    model = model_in
     for layer in generator.layers:
         layer.trainable = False
-        model.add(layer)
+        model = layer(model)
     for layer in encoder.layers:
         if layer in discriminator.layers:
             layer.trainable = False
-        model.add(layer)
-    return model
+        model = layer(model)
+    model_obj = Model(model_in, model)
+    return model_obj
 
-
-#def stack_enc_gen(encoder, generator, discriminator):
-#    """
-#    Combines encoder and generator layers together while freezing the weights of all layers except the last
-#    in the encoder. This is used to train the encoder network to convert image data into a low-dimensional vector
-#     representation.
-#
-#    Args:
-#        encoder: Encoder network
-#        generator: Decoder network
-#        discriminator: Discriminator network. Used to freeze shared layers in encoder
-#    Returns:
-#        Encoder layers attached to generator layers
-#    """
-#    model = generator(encoder.output)
-#    model_obj = Model(encoder.input, model)
-#    generator.trainable = False
-#    for layer in model_obj.layers:
-#        if (layer in discriminator.layers) or (layer in generator.layers):
-#            layer.trainable = False
-#    return model_obj
 
 def stack_enc_gen(encoder, generator, discriminator):
     """
@@ -334,9 +345,31 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
     return model
 
 
-def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, enc_gen, vec_size, gan_path, gan_index,
+def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, gen_enc, vec_size, gan_path, gan_index,
                      metrics=("accuracy", ), batch_size=128, num_epochs=(1, 5, 10), scaling_values=None,
-                     out_dtype="uint8"):
+                     out_dtype="uint8", ind_encoder=None):
+    """
+    Train GAN with encoder layers linked in. Also trains independent encoder on output from final epoch of generator.
+
+    Args:
+        train_data: 4D array of data used for training the model.
+        generator: Generator neural network z->x
+        encoder: Encoder neural network x->z.
+        discriminator: Discriminator neural network x->p(x is real).
+        gen_disc: Stacked generator and discriminator.
+        gen_enc: Stacked generator and encoder.
+        vec_size: Size of generator input vector
+        gan_path: Path where GAN models and loss information are saved.
+        gan_index: GAN configuration number.
+        metrics: List of metrics used in discriminator
+        batch_size: Number of training examples in each batch
+        num_epochs: List of epochs at which models and generator examples are saved.
+        scaling_values: pandas DataFrame of values used to normalize and rescale training data
+        out_dtype: dtype of output data
+        ind_encoder: Independent Encoder model
+    Returns:
+        None
+    """
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     train_order = np.arange(train_data.shape[0])
@@ -347,10 +380,10 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
     current_epoch = []
     batch_labels = np.zeros(batch_size, dtype=int)
     batch_labels[:batch_half] = 1
-    disc_labels = np.zeros(batch_size, dtype=int)
     gen_labels = np.ones(batch_size, dtype=int)
     batch_vec = np.zeros((batch_size, vec_size))
-    gen_batch_vec = np.zeros((batch_size, vec_size))
+    gen_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
+    enc_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
     hist_cols = ["Epoch", "Batch", "Disc Loss"] + ["Disc " + m for m in metrics] + \
                 ["Gen Loss"] + ["Gen " + m for m in metrics] + ["Enc Loss"] + ["Enc " + m for m in ["mse", "mae"]]
@@ -359,10 +392,9 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
     for epoch in range(1, max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            #batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
-            #gen_batch_vec[:] = np.random.uniform(-1, 1, size=(batch_size, vec_size))
-            batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
-            gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size)) 
+            batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
+            gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
+            enc_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
             disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
@@ -379,8 +411,8 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                                                                                    *gen_loss_history[-1]))
             if b == 0:
                 print(generator.summary())
-                print(enc_gen.summary())
-            gen_enc_loss_history.append(enc_gen.train_on_batch(combo_data_batch, combo_data_batch))
+                print(gen_enc.summary())
+            gen_enc_loss_history.append(gen_enc.train_on_batch(enc_batch_vec, enc_batch_vec))
             print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index, 
                                                                                    epoch, b,
                                                                                    gen_enc_loss_history[-1][0]))
@@ -393,7 +425,7 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
             generator.save(join(gan_path, "gan_generator_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
             discriminator.save(join(gan_path, "gan_discriminator_{0:04d}_{1:04d}.h5".format(gan_index, epoch)))
             gen_noise = np.random.normal(size=(batch_size, vec_size))
-            gen_data_epoch = unscale_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
+            gen_data_epoch = unnormalize_multivariate_data(generator.predict_on_batch(gen_noise), scaling_values)
             gen_da = xr.DataArray(gen_data_epoch.astype(out_dtype), coords={"p": np.arange(gen_data_epoch.shape[0]),
                                                                             "y": np.arange(gen_data_epoch.shape[1]),
                                                                             "x": np.arange(gen_data_epoch.shape[2]),
@@ -406,12 +438,13 @@ def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, en
                                                           encoding={"gen_patch": {"zlib": True,
                                                                                   "complevel": 1}})
             encoder.save(join(gan_path, "gan_encoder_{0:04d}_epoch_{1:04d}.h5".format(gan_index, epoch)))
+        if epoch == num_epochs[-1] and ind_encoder is not None:
+            print("Training Independent Encoder {0:d}".format(gan_index))
+            gen_vec = np.random.normal(size=(train_data.shape[0], vec_size))
+            gen_data = generator.predict(gen_vec)
+            ind_encoder.fit(gen_data, gen_vec, batch_size=batch_size, epochs=num_epochs[-1], verbose=2)
+            ind_encoder.save(join(gan_path, "gan_indencoder_{0:04d}_{1:04d}.h5".format(gan_index, epoch)))
         time_history_index = pd.DatetimeIndex(time_history)
-        hist_arr = np.hstack([current_epoch, disc_loss_history,
-                              gen_loss_history, gen_enc_loss_history])
-        print(hist_arr.shape)
-        print(hist_cols)
-        print(len(hist_cols))
         history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
                                           gen_loss_history, gen_enc_loss_history]),
                                index=time_history_index, columns=hist_cols)
@@ -727,3 +760,42 @@ def unscale_multivariate_data(data, scaling_values):
                                         scaling_values.loc[i, "max_mag"])
         unnormed_data[:, :, :, i] = unscaled_data * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
     return unnormed_data
+
+
+def normalize_multivariate_data(data, scaling_values=None):
+    """
+    Normalize each channel in the 4 dimensional data matrix independently.
+
+    Args:
+        data: 4-dimensional array with dimensions (example, y, x, channel/variable)
+        scaling_values: pandas dataframe containing mean and std columns
+
+    Returns:
+        normalized data array, scaling_values
+    """
+    normed_data = np.zeros(data.shape, dtype=data.dtype)
+    scale_cols = ["mean", "std"]
+    if scaling_values is None:
+        scaling_values = pd.DataFrame(np.zeros((data.shape[-1], len(scale_cols)), dtype=np.float32),
+                                      columns=scale_cols)
+    for i in range(data.shape[-1]):
+        scaling_values.loc[i, ["mean", "std"]] = [data[:, :, :, i].mean(), data[:, :, :, i].std()]
+        normed_data[:, :, :, i] = (data[:, :, :, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
+    return normed_data, scaling_values
+
+
+def unnormalize_multivariate_data(normed_data, scaling_values):
+    """
+    Return normalized data to original values by multiplying by standard deviation and adding the mean.
+
+    Args:
+        normed_data: 4-dimensional array of normalized values with dimensions (example, y, x, channel/variable)
+        scaling_values: pandas dataframe containing mean and std columns
+
+    Returns:
+        data array
+    """
+    data = np.zeros(normed_data.shape, dtype=normed_data.dtype)
+    for i in range(normed_data.shape[-1]):
+        data[:, :, :, i] = normed_data[:, :, :, i] * scaling_values.loc[i, "std"] + scaling_values.loc[i, "mean"]
+    return data
