@@ -32,5 +32,41 @@ def spatial_covariance(distances, z, eval_distances, tolerance=0.2):
     return covariances
 
 
-def tscore(cov_a, cov_b):
-    return ttest_ind(cov_a, cov_b)
+@jit(nopython=True)
+def local_spatial_covariance(window_width, stride, distances, z, eval_distances, tolerance=0.2):
+    """
+    Calculate spatial covariance values within a moving window over a spatial domain.
+
+    Args:
+        window_width: width of the spatial window in number of grid points
+        stride: how far to advance the window between covariance calculations
+        distances: Pointwise distance matrix
+        z: Intensity values being evaluated. Should be in 2D grid shape
+        eval_distances: Set of distances being evaluated
+        tolerance: Bounds for capturing points within distance +/- tolerance value.
+
+    Returns:
+        Grid of covariance values with dimensions (eval_distances,
+                                                   z.shape[0] - window_width + 1) // stride,
+                                                   z.shape[1] - window_width + 1) // stride)
+    """
+    num_windows_col = (z.shape[1] - window_width + 1) // stride
+    num_windows_row = (z.shape[0] - window_width + 1) // stride
+    cov_grid = np.zeros((len(eval_distances), num_windows_row, num_windows_col))
+    w_i = 0
+    w_j = 0
+    c_i = 0
+    c_j = 0
+    index_grid = np.arange(z.size).reshape(z.shape)
+    while w_i < z.shape[0] - window_width:
+        while w_j < z.shape[1] - window_width:
+            d_points = index_grid[w_i: w_i + window_width, w_j: w_j + window_width].ravel()
+            cov_grid[:, c_i, c_j] = spatial_covariance(distances[d_points, d_points],
+                                                       z[w_i: w_i + window_width, w_j: w_j + window_width],
+                                                       eval_distances, tolerance=tolerance)
+            w_j += stride
+            c_j += 1
+        w_i += stride
+        c_j += 1
+    return cov_grid
+
