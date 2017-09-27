@@ -16,8 +16,8 @@ from datetime import datetime
 
 
 def main():
-    gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
-    #gan_path = "/scratch/dgagne/random_gan_{0}".format("20170801")
+    #gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
+    gan_path = "/scratch/dgagne/random_gan_{0}".format("20170905")
     # gan_params = dict(generator_input_size=[16, 32, 128],
     #                   filter_width=[3, 5],
     #                   min_data_width=[4],
@@ -74,18 +74,19 @@ def main():
 def train_gan_configs(gpu_num, num_epochs, gan_params, metrics, gan_path, out_dtype):
     try:
         os.environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(gpu_num)
-        session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True,
-                                                       gpu_options=K.tf.GPUOptions(allow_growth=True),
-                                                       log_device_placement=False))
-        K.set_session(session)
-        num_combos = gan_params.shape[0]
-        with K.tf.device("/gpu:{0:d}".format(0)):
-            for c, i in enumerate(gan_params.index.values):
+        for c, i in enumerate(gan_params.index.values):
+            session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=True,
+                                                           gpu_options=K.tf.GPUOptions(allow_growth=True),
+                                                           log_device_placement=False))
+            K.set_session(session)
+            num_combos = gan_params.shape[0]
+            with K.tf.device("/gpu:{0:d}".format(0)):
                 if not exists(join(gan_path, "gan_gen_patches_{0:04d}_epoch_{1:04d}.nc".format(i, num_epochs[-1]))):
                     print("Starting combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
                     train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype)
                 else:
                     print("Already trained combo {0:d} ({1:d} of {2:d})".format(i, c, num_combos))
+            session.close()
     except Exception as e:
         print(traceback.format_exc())
         raise e
@@ -157,7 +158,7 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
                      int(gan_params.loc[i, "generator_input_size"]),
                      gan_path, i, batch_size=int(gan_params.loc[i, "batch_size"]),
                      metrics=metrics, num_epochs=num_epochs, scaling_values=scaling_values,
-                     out_dtype=out_dtype)
+                     out_dtype=out_dtype, ind_encoder=ind_enc_model)
     del data
 
 

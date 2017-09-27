@@ -293,16 +293,15 @@ def stack_gen_enc(generator, encoder, discriminator):
     Returns:
         Encoder layers attached to generator layers
     """
-    model_in = generator.input
-    model = model_in
-    for layer in generator.layers:
+    model = generator.input
+    for layer in generator.layers[1:]:
         layer.trainable = False
         model = layer(model)
     for layer in encoder.layers:
         if layer in discriminator.layers:
             layer.trainable = False
         model = layer(model)
-    model_obj = Model(model_in, model)
+    model_obj = Model(generator.input, model)
     return model_obj
 
 
