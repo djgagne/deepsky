@@ -25,7 +25,8 @@ def main():
     if args.proc > 1:
         pool = Pool(args.proc)
         for gan_index in gan_params.index:
-            pool.apply_async(eval_full_gan_config, (gan_index, epochs, args.input,
+            pool.apply_async(eval_full_gan_config, (gan_index, gan_params.loc[gan_index, "length_scale"],
+                                                    epochs, args.input,
                                                     gan_params.loc[gan_index, "data_width"],
                                                     eval_distances,
                                                     tolerance),
@@ -43,7 +44,22 @@ def main():
     return
 
 
-def eval_full_gan_config(gan_index, epochs, gan_path, data_width, eval_distances, tolerance):
+def eval_full_gan_config(gan_index, length_scale_str, epochs, gan_path, data_width, eval_distances, tolerance,
+                         batch_size=256):
+    """
+    Evaluate GAN configurations with the full configuration
+
+    Args:
+        gan_index:
+        epochs:
+        gan_path:
+        data_width:
+        eval_distances:
+        tolerance:
+
+    Returns:
+
+    """
     gan_mean_cols = ["cov_mean_{0:02d}".format(x) for x in eval_distances]
     gan_sd_cols = ["cov_sd_{0:02d}".format(x) for x in eval_distances]
     gan_t_cols = ["cov_t_{0:02d}".format(x) for x in eval_distances]
@@ -54,16 +70,19 @@ def eval_full_gan_config(gan_index, epochs, gan_path, data_width, eval_distances
     y = np.arange(data_width)
     x_g, y_g = np.meshgrid(x, y)
     distances = distance_matrix(x_g, y_g)
-    corr = exp_kernel(distances, 3)
+    length_scale_list = length_scale_str.split(";")
+    spatial_pattern = length_scale_list[0]
+    length_scales = [float(v) for v in length_scale_list[1:]]
+    corr = exp_kernel(distances, length_scales[0])
     cho = cholesky(corr, lower=True)
     cho_inv = np.linalg.inv(cho)
-    rand_covs = np.zeros((256, eval_distances.size))
-    random_gen = random_field_generator(x_g, y_g, [3])
-    random_fields = np.stack([next(random_gen) for x in range(256)], axis=0)[:, :, :, 0]
+    rand_covs = np.zeros((batch_size, eval_distances.size))
+    random_gen = random_field_generator(x_g, y_g, length_scales[0])
+    random_fields = np.stack([next(random_gen) for x in range(batch_size)], axis=0)[:, :, :, 0]
     random_noise = np.stack([np.matmul(cho_inv,
                                        random_field.reshape(random_field.size, 1)).reshape(random_fields.shape[1:]) for
                              random_field in random_fields], axis=0)
-    noise_cov = np.zeros((256, eval_distances.size))
+    noise_cov = np.zeros((batch_size, eval_distances.size))
     for p, patch in enumerate(random_noise):
         noise_cov[p] = spatial_covariance(distances, patch, eval_distances, tolerance)
     noise_mean = noise_cov.mean(axis=0)
@@ -77,18 +96,38 @@ def eval_full_gan_config(gan_index, epochs, gan_path, data_width, eval_distances
             for p, patch in enumerate(gan_patches):
                 rand_patch = np.matmul(cho_inv, patch.reshape(patch.size, 1)).reshape(patch.shape)
                 rand_covs[p] = spatial_covariance(distances, rand_patch, eval_distances, tolerance)
+            gan_stats.loc[e, "Index"] = gan_index
+            gan_stats.loc[e, "Epoch"] = epoch
             gan_stats.loc[e, gan_mean_cols] = rand_covs.mean(axis=0)
             gan_stats.loc[e, gan_sd_cols] = rand_covs.std(axis=0)
             gan_stats.loc[e, gan_t_cols] = ttest_ind_from_stats(gan_stats.loc[e, gan_mean_cols].values,
-                                                                    gan_stats.loc[e, gan_sd_cols].values,
-                                                                    np.array([256] * len(eval_distances)),
-                                                                    noise_mean,
-                                                                    noise_sd,
-                                                                    np.array([256] * len(eval_distances)),
-                                                                    equal_var=False)[0]
+                                                                gan_stats.loc[e, gan_sd_cols].values,
+                                                                np.ones(len(eval_distances) * batch_size),
+                                                                noise_mean,
+                                                                noise_sd,
+                                                                np.ones(len(eval_distances) * batch_size),
+                                                                equal_var=False)[0]
             gan_stats.loc[e, "mean_tscore"] = np.abs(gan_stats.loc[e, gan_t_cols]).mean()
             gan_stats.loc[e, "max_tscore"] = np.abs(gan_stats.loc[e, gan_t_cols]).max()
     return gan_stats
+
+
+def eval_stacked_gan_config(gan_index, length_scale_str, epochs, gan_path, data_width, eval_distances, tolerance,
+                            batch_size=256):
+    x = np.arange(data_width)
+    y = np.arange(data_width)
+    x_g, y_g = np.meshgrid(x, y)
+    distances = distance_matrix(x_g, y_g)
+    length_scale_list = length_scale_str.split(";")
+    spatial_pattern = length_scale_list[0]
+    length_scales = [float(v) for v in length_scale_list[1:]]
+
+    for l, length in enumerate(length_scales):
+        corr = exp_kernel(distances, length_scales[0])
+        cho = cholesky(corr, lower=True)
+        cho_inv = np.linalg.inv(cho)
+        rand_covs = np.zeros((batch_size, eval_distances.size))
+    return
 
 if __name__ == "__main__":
     main()
