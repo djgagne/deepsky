@@ -1,0 +1,48 @@
+data_path: /scratch/dgagne/ncar_ens_storm_patches/
+input_variables:
+  - geopotential_height_500_mb_prev
+  - geopotential_height_700_mb_prev
+  - geopotential_height_850_mb_prev
+  - temperature_500_mb_prev
+  - temperature_700_mb_prev
+  - temperature_850_mb_prev
+  - dew_point_temperature_500_mb_prev
+  - dew_point_temperature_700_mb_prev
+  - dew_point_temperature_850_mb_prev
+  - u-component_of_wind_500_mb_prev
+  - u-component_of_wind_700_mb_prev
+  - u-component_of_wind_850_mb_prev
+  - v-component_of_wind_500_mb_prev
+  - v-component_of_wind_700_mb_prev
+  - v-component_of_wind_850_mb_prev
+output:
+  variable: thompson_max_hail_k1_surface_current
+  mask: mask
+  thresholds: [5, 25, 50]
+sampling:
+  num_samples: 30
+  train_split: 0.7
+out_path: /scratch/dgagne/spatial_storm_results_20171215/
+conv_net:
+  data_width: 32
+  num_input_channels: 15
+  filter_width: 5
+  min_conv_filters: 32
+  filter_growth_rate: 2
+  min_data_width: 4
+  dropout_alpha: 0.1
+  activation: leaky
+  regularization_alpha: 0.01
+  optimizer: sgd
+  learning_rate: 0.001
+  loss: mse
+  metrics: ["mae", "auc"]
+  batch_size: 128
+  num_epochs: 20
+logistic_mean:
+  penalty: l1
+  C: 0.01
+logistic_pca:
+  num_components: 5
+  penalty: l1
+  C: 0.01
