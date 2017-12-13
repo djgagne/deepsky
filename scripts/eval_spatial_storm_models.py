@@ -240,23 +240,23 @@ def load_storm_patch_data(data_path, variable_names):
     members = []
     data_files = sorted(glob(join(data_path, "*.nc")))
     for data_file in data_files:
-        print(data_file)
         member = int(data_file.split("/")[-1][-5:-3])
         ds = xr.open_dataset(data_file)
         patch_arr = []
         all_vars = list(ds.variables.keys())
         if np.all(np.in1d(variable_names, all_vars)):
             centers.append(np.array([ds["longitude"][:, 32, 32], ds["latitude"][:, 32, 32]]).T)
-            members.append(np.ones(centers[-1].size, dtype=int) * member)
             valid_dates.append(ds["valid_date"].values)
+            members.append(np.ones(centers[-1].shape[0], dtype=int) * member)
             for variable in variable_names:
                 patch_arr.append(ds[variable][:, 16:-16, 16:-16].values)
-            data_patches.append(np.stack(patch_arr, axis=-1))
+            data_patches.append(np.stack(patch_arr, axis=-1)) 
+            print(data_file, members[-1].size)
         ds.close()
         del patch_arr
         del ds
     center_arr = np.vstack(centers)
-    members_arr = np.vstack(members)
+    members_arr = np.concatenate(members)
     valid_date_index = pd.DatetimeIndex(np.concatenate(valid_dates))
     data = np.vstack(data_patches)
     return data, center_arr, valid_date_index, members_arr
