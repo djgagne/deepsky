@@ -1,4 +1,5 @@
 data_path: /scratch/dgagne/ncar_ens_storm_patches/
+out_path: /scratch/dgagne/spatial_storm_results_20171213/
 input_variables:
   - geopotential_height_500_mb_prev
   - geopotential_height_700_mb_prev
@@ -18,31 +19,33 @@ input_variables:
 output:
   variable: thompson_max_hail_k1_surface_current
   mask: mask
-  thresholds: [5, 25, 50]
+  threshold: 25
 sampling:
+  random_seed: 412901
   num_samples: 30
   train_split: 0.7
-out_path: /scratch/dgagne/spatial_storm_results_20171215/
+  member_split: 0.7
+model_names: ["conv_net", "logistic_mean", "logistic_pca"]
 conv_net:
-  data_width: 32
-  num_input_channels: 15
-  filter_width: 5
-  min_conv_filters: 32
-  filter_growth_rate: 2
-  min_data_width: 4
-  dropout_alpha: 0.1
-  activation: leaky
-  regularization_alpha: 0.01
-  optimizer: sgd
-  learning_rate: 0.001
-  loss: mse
-  metrics: ["mae", "auc"]
-  batch_size: 128
-  num_epochs: 20
+  data_width: [32]
+  num_input_channels: [15]
+  filter_width: [5]
+  min_conv_filters: [16, 32]
+  filter_growth_rate: [2]
+  min_data_width: [4]
+  dropout_alpha: [0.1, 0.3]
+  activation: ["leaky", "relu"]
+  regularization_alpha: [0.01, 0.001]
+  optimizer: ["sgd", "adam"]
+  learning_rate: [0.001, 0.0001]
+  loss: ["mse"]
+  metrics: [["mae", "auc"]]
+  batch_size: [128]
+  num_epochs: [10]
 logistic_mean:
-  penalty: l1
-  C: 0.01
+  penalty: [l1]
+  C: [0.1, 0.01, 0.001]
 logistic_pca:
-  num_components: 5
-  penalty: l1
-  C: 0.01
+  num_components: [3, 5]
+  penalty: ["l1"]
+  C: [0.1, 0.01, 0.001]
