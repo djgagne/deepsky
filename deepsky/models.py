@@ -4,6 +4,7 @@ from sklearn.decomposition import PCA
 from keras.layers import Input, Conv2D, LeakyReLU, Activation, BatchNormalization, Dropout, Flatten, Dense
 from keras.optimizers import Adam, SGD
 from keras.models import Model
+from keras.regularizers import l2
 import keras.backend as K
 import numpy as np
 
