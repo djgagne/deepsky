@@ -1,5 +1,5 @@
 data_path: /scratch/dgagne/ncar_ens_storm_patches/
-out_path: /scratch/dgagne/spatial_storm_results_20171213/
+out_path: /scratch/dgagne/spatial_storm_results_20171220/
 input_variables:
   - geopotential_height_500_mb_prev
   - geopotential_height_700_mb_prev
@@ -39,11 +39,12 @@ conv_net:
   optimizer: ["sgd", "adam"]
   learning_rate: [0.001, 0.0001]
   loss: ["mse"]
-  metrics: [["mae", "auc"]]
+  metrics: [["mae"]]
   batch_size: [128]
-  num_epochs: [10]
+  num_epochs: [15]
+  num_gpus: [8]
 logistic_mean:
-  penalty: [l1]
+  penalty: ["l1"]
   C: [0.1, 0.01, 0.001]
 logistic_pca:
   num_components: [3, 5]
