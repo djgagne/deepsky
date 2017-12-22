@@ -60,11 +60,11 @@ def main():
     del output_meta
     del storm_data
     print("Severe hail events: ", np.count_nonzero(hail_labels == 1))
-    #evaluate_conv_net(storm_norm_data, storm_meta, hail_labels,
-    #                  sampling_config, all_param_combos["conv_net"], config["out_path"])
-    #evaluate_sklearn_model("logistic_mean", LogisticRegression, storm_mean_data, storm_meta,
-    #                       hail_labels, sampling_config,
-    #                       all_param_combos["logistic_mean"], config["out_path"])
+    evaluate_conv_net(storm_norm_data, storm_meta, hail_labels,
+                      sampling_config, all_param_combos["conv_net"], config["out_path"])
+    evaluate_sklearn_model("logistic_mean", LogisticRegression, storm_mean_data, storm_meta,
+                           hail_labels, sampling_config,
+                           all_param_combos["logistic_mean"], config["out_path"])
     evaluate_sklearn_model("logistic_pca", LogisticPCA, storm_flat_data, storm_meta,
                            hail_labels, sampling_config,
                            all_param_combos["logistic_pca"], config["out_path"])
