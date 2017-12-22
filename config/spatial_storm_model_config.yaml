@@ -47,6 +47,6 @@ logistic_mean:
   penalty: ["l1"]
   C: [0.1, 0.01, 0.001]
 logistic_pca:
-  num_components: [3, 5]
+  n_components: [3, 5]
   penalty: ["l1"]
   C: [0.1, 0.01, 0.001]

@@ -60,11 +60,11 @@ def main():
     del output_meta
     del storm_data
     print("Severe hail events: ", np.count_nonzero(hail_labels == 1))
-    evaluate_conv_net(storm_norm_data, storm_meta, hail_labels,
-                      sampling_config, all_param_combos["conv_net"], config["out_path"])
-    evaluate_sklearn_model("logistic_mean", LogisticRegression, storm_mean_data, storm_meta,
-                           hail_labels, sampling_config,
-                           all_param_combos["logistic_mean"], config["out_path"])
+    #evaluate_conv_net(storm_norm_data, storm_meta, hail_labels,
+    #                  sampling_config, all_param_combos["conv_net"], config["out_path"])
+    #evaluate_sklearn_model("logistic_mean", LogisticRegression, storm_mean_data, storm_meta,
+    #                       hail_labels, sampling_config,
+    #                       all_param_combos["logistic_mean"], config["out_path"])
     evaluate_sklearn_model("logistic_pca", LogisticPCA, storm_flat_data, storm_meta,
                            hail_labels, sampling_config,
                            all_param_combos["logistic_pca"], config["out_path"])
@@ -285,7 +285,7 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
                 best_config = c
                 best_score = param_scores.loc[c, "Brier Skill Score"]
             del model_inst
-        param_scores.to_csv(join(out_path, "{0}_param_scores_sample_{1:03d}.h5".format(model_name, n)),
+        param_scores.to_csv(join(out_path, "{0}_param_scores_sample_{1:03d}.csv".format(model_name, n)),
                             index_label="Param Combo")
         best_param_combos.append(best_config)
         print("Best Config")
@@ -298,6 +298,7 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
         test_pred_frame = storm_meta.loc[test_indices]
         test_pred_frame[model_name] = model_inst.predict_proba(storm_data[test_indices])[:, 1]
         test_pred_frame["label"] = hail_labels[test_indices]
+        test_preds = test_pred_frame[model_name].values
         #test_pred_frame = pd.DataFrame({"indices": test_indices,
                                        # "lon": storm_centers[test_indices, 0],
                                        # "lat": storm_centers[test_indices, 1],
@@ -307,7 +308,7 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
                                        # model_name: test_preds,
                                        # "label": hail_labels[test_indices]},
                                        #columns=["indices", "lon", "lat", "dates", "members", "conv_net", "label"])
-        test_pred_frame.to_csv(join(out_path, "predictions_{0}_sample_{1:03d}.h5".format(model_name, n)), index_label="Index")
+        test_pred_frame.to_csv(join(out_path, "predictions_{0}_sample_{1:03d}.csv".format(model_name, n)), index_label="Index")
         sample_scores.loc[n, "Brier Score"] = brier_score(hail_labels[test_indices], test_preds)
         sample_scores.loc[n, "Brier Score Climo"] = brier_score(hail_labels[test_indices],
                                                                 hail_labels[test_indices].mean())
