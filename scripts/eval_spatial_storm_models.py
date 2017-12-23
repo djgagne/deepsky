@@ -45,6 +45,7 @@ def main():
     print("Loading data")
     storm_data, storm_meta = load_storm_patch_data(data_path, input_variables, args.proc)
     storm_norm_data, storm_scaling_values = normalize_multivariate_data(storm_data)
+    storm_scaling_values.to_csv(join(config["out_path"], "scaling_values.csv"), index_label="Index")
     storm_flat_data = storm_norm_data.reshape(storm_norm_data.shape[0],
                                               storm_norm_data.shape[1] * storm_norm_data.shape[2],
                                               storm_norm_data.shape[3])
