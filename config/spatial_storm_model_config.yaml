@@ -43,6 +43,15 @@ conv_net:
   batch_size: [128]
   num_epochs: [15]
   num_gpus: [8]
+logistic_gan:
+  data_width: [32]
+  num_input_channels: [15]
+  filter_width: [5]
+  min_conv_filters: [64, 128]
+  min_data_width: [4]
+  dropout_alpha: [0, 0.1]
+  activation: ["leaky", "relu", "selu"]
+  encoding_channels: [32, 128]
 logistic_mean:
   penalty: ["l1"]
   C: [0.1, 0.01, 0.001]

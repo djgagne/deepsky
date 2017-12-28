@@ -4,6 +4,7 @@ import pandas as pd
 from keras.models import Sequential, Model
 from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D, AlphaDropout
 from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, BatchNormalization
+from keras.regularizers import l2
 import xarray as xr
 from os.path import join
 import keras.backend as K
@@ -33,7 +34,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
     curr_conv_filters = max_conv_filters
     vector_input = Input(shape=(input_size, ), name="gen_input")
-    model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
+    model = Dense(units=max_conv_filters * min_data_width * min_data_width, activity_regularizer=l2())(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
     if activation == "leaky":
         model = LeakyReLU(alpha=0.2)(model)
@@ -42,7 +43,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, filter_width,
-                                  strides=(stride, stride), padding="same")(model)
+                                  strides=(stride, stride), padding="same", activity_regularizer=l2())(model)
         if activation == "leaky":
             model = LeakyReLU(alpha=0.2)(model)
         else:
@@ -53,7 +54,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
             model = Dropout(dropout_alpha)(model)
     model = Conv2DTranspose(output_size[-1], filter_width,
                               strides=(stride, stride),
-                              padding="same")(model)
+                              padding="same", activity_regularizer=l2())(model)
     model = Activation(output_activation)(model)
     return model, vector_input
 
@@ -132,7 +133,7 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     model = image_input
     for c in range(num_layers):
         model = Conv2D(curr_conv_filters, filter_width,
-                       strides=(stride, stride), padding="same")(model)
+                       strides=(stride, stride), padding="same", activity_regularizer=l2())(model)
         if activation == "leaky":
             model = LeakyReLU(0.2)(model)
         else:
@@ -143,14 +144,14 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
             model = Dropout(dropout_alpha)(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
-    enc_model = Dense(int(0.5 * curr_conv_filters * filter_width ** 2))(model)
+    enc_model = Dense(int(0.5 * curr_conv_filters * filter_width ** 2), activity_regularizer=l2())(model)
     if activation == "leaky":
         enc_model = LeakyReLU(0.2)(enc_model)
     else:
         enc_model = Activation(activation)(enc_model)
-    enc_model = Dense(output_size)(enc_model)
+    enc_model = Dense(output_size, activity_regularizer=l2())(enc_model)
     enc_model = Activation(encoder_output_activation)(enc_model)
-    disc_model = Dense(1)(model)
+    disc_model = Dense(1, activity_regularizer=l2())(model)
     disc_model = Activation("sigmoid")(disc_model)
     return disc_model, enc_model, image_input
 
@@ -342,6 +343,44 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
         layer.trainable = False
         model.add(layer)
     return model
+
+
+def train_gan_quiet(train_data, generator, discriminator, gen_disc, gen_enc, vec_size,
+                    batch_size, num_epochs, gan_index):
+    batch_size = int(batch_size)
+    batch_half = int(batch_size // 2)
+    train_order = np.arange(train_data.shape[0])
+    batch_labels = np.zeros(batch_size, dtype=int)
+    batch_labels[:batch_half] = 1
+    gen_labels = np.ones(batch_size, dtype=int)
+    batch_vec = np.zeros((batch_size, vec_size))
+    gen_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
+    enc_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
+    combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]))
+    disc_loss_history = []
+    gen_loss_history = []
+    gen_enc_loss_history = []
+    for epoch in range(1, max(num_epochs) + 1):
+        np.random.shuffle(train_order)
+        for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
+            batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
+            gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
+            enc_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
+            combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
+            combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
+            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
+            print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index,
+                                                                                epoch, b,
+                                                                                disc_loss_history[-1]))
+            gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
+                                                            gen_labels))
+            print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index,
+                                                                               epoch, b,
+                                                                               gen_loss_history[-1]))
+            gen_enc_loss_history.append(gen_enc.train_on_batch(enc_batch_vec, enc_batch_vec))
+            print("Gen Enc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index,
+                                                                                   epoch, b,
+                                                                                   gen_enc_loss_history[-1][0]))
 
 
 def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, gen_enc, vec_size, gan_path, gan_index,
