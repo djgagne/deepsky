@@ -25,7 +25,7 @@ sampling:
   num_samples: 30
   train_split: 0.7
   member_split: 0.7
-model_names: ["conv_net", "logistic_mean", "logistic_pca"]
+model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
 conv_net:
   data_width: [32]
   num_input_channels: [15]
@@ -47,11 +47,14 @@ logistic_gan:
   data_width: [32]
   num_input_channels: [15]
   filter_width: [5]
-  min_conv_filters: [64, 128]
+  min_conv_filters: [32, 64]
   min_data_width: [4]
   dropout_alpha: [0, 0.1]
-  activation: ["leaky", "relu", "selu"]
-  encoding_channels: [32, 128]
+  num_epochs: [10]
+  activation: ["leaky", "selu"]
+  encoding_channels: [32, 64]
+  penalty: ["l2"]
+  learning_rate: [0.0001]
 logistic_mean:
   penalty: ["l1"]
   C: [0.1, 0.01, 0.001]

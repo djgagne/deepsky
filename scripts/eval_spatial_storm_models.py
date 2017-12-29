@@ -7,8 +7,9 @@ from sklearn.metrics import roc_auc_score
 from deepsky.gan import normalize_multivariate_data
 from deepsky.metrics import brier_score, brier_skill_score
 from sklearn.linear_model import LogisticRegression
-from deepsky.models import hail_conv_net, LogisticPCA, LogisticGAN
+from deepsky.models import hail_conv_net, LogisticPCA, LogisticGAN, save_logistic_gan
 import pickle
+import inspect
 import itertools as it
 from glob import glob
 from os.path import join, exists
@@ -17,7 +18,6 @@ import yaml
 import argparse
 import traceback
 from multiprocessing import Pool, Manager
-environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
 def main():
@@ -36,6 +36,7 @@ def main():
         all_param_combos[model_name] = pd.DataFrame(list(it.product(*[config[model_name][conv_name]
                                                     for conv_name in param_names])),
                                                     columns=param_names)
+        all_param_combos[model_name].to_csv(join(config["out_path"], model_name + "_param_combos.csv"), index_label="Index")
     output_config = config["output"]
     sampling_config = config["sampling"]
     data_path = config["data_path"]
@@ -84,6 +85,7 @@ def train_split_generator(values, train_split, num_samples):
 
 
 def train_single_conv_net(config_num, device_queue, conv_net_params, out_path):
+    device = -1
     try:
         print("Starting process ", config_num)
         device = int(device_queue.get())
@@ -116,33 +118,38 @@ def train_single_conv_net(config_num, device_queue, conv_net_params, out_path):
         device_queue.put(device)
         return param_scores, config_num
     except Exception as e:
+        if device >= 0:
+            device_queue.put(device)
         print(traceback.format_exc())
         raise e
 
 
 def train_single_sklearn_model(model_name, model_obj, config_num, params, out_path,
-                               use_gpu=False, device_queue=None):
+                               device_queue=None):
+    device = -1
     try:
         print("Starting process ", config_num)
-        if use_gpu and device_queue is not None:
+        if device_queue is not None:
             device = int(device_queue.get())
             print("Process {0:d} using GPU {1:d}".format(config_num, device))
             environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
-        else:
-            device = 0
         param_scores = {}
         train_data = np.load(join(out_path, "param_train_data.npy"))
         train_labels = np.load(join(out_path, "param_train_labels.npy"))
         val_data = np.load(join(out_path, "param_val_data.npy"))
         val_labels = np.load(join(out_path, "param_val_labels.npy"))
         session = None
-        if use_gpu:
+        if device_queue is not None:
             session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
                                                            gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                            log_device_placement=False))
             K.set_session(session)
         print("Training ", model_name, config_num, device)
-        hail_model = model_obj(**params)
+        model_args = inspect.getargspec(model_obj.__init__).args
+        if "index" in model_args:
+            hail_model = model_obj(index=config_num, **params)
+        else:
+            hail_model = model_obj(**params)
         hail_model.fit(train_data,
                        train_labels)
         val_preds = hail_model.predict_proba(val_data)[:, 1]
@@ -152,12 +159,15 @@ def train_single_sklearn_model(model_name, model_obj, config_num, params, out_pa
                                             val_preds)
 
         print("Scores ", config_num, device, param_scores["Brier Skill Score"], param_scores["AUC"])
-        if use_gpu:
+        if device_queue is not None and device >= 0:
             session.close()
             del session
             device_queue.put(device)
+        del hail_model
         return param_scores, config_num
     except Exception as e:
+        if device_queue is not None and device >= 0:
+            device_queue.put(device)
         print(traceback.format_exc())
         raise e
 
@@ -181,15 +191,18 @@ def train_best_sklearn_model(model_name, model_obj, best_combo, n, train_labels,
         test_pred_frame = test_meta.copy(deep=True)
         test_pred_frame["conv_net"] = test_preds
         test_pred_frame["label"] = test_labels
-        test_pred_frame.to_csv(join(out_path, "predictions_{0}_sample_{0:03d}.csv".format(model_name, n)),
+        test_pred_frame.to_csv(join(out_path, "predictions_{0}_sample_{1:03d}.csv".format(model_name, n)),
                                index_label="Index")
         sample_scores.loc[n, "Brier Score"] = brier_score(test_labels, test_preds)
         sample_scores.loc[n, "Brier Score Climo"] = brier_score(test_labels,
                                                                 test_labels.mean())
         sample_scores.loc[n, "Brier Skill Score"] = brier_skill_score(test_labels, test_preds)
         sample_scores.loc[n, "AUC"] = roc_auc_score(test_labels, test_preds)
-        with open(join(out_path, "hail_{0}_sample_{1:03d}.pkl".format(model_name, n)), "wb") as model_file:
-            pickle.dump(hail_model, model_file, pickle.HIGHEST_PROTOCOL)
+        if model_name == "logistic_gan":
+            save_logistic_gan(hail_model, out_path)
+        else:
+            with open(join(out_path, "hail_{0}_sample_{1:03d}.pkl".format(model_name, n)), "wb") as model_file:
+                pickle.dump(hail_model, model_file, pickle.HIGHEST_PROTOCOL)
         session.close()
         del session
         del hail_model
@@ -351,7 +364,9 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
         val_members = all_members[member_split:]
         train_member_indices = np.where(np.in1d(storm_meta.loc[train_indices, "members"], train_members))[0]
         val_member_indices = np.where(np.in1d(storm_meta.loc[train_indices, "members"], val_members))[0]
-        param_scores = pd.DataFrame(index=np.arange(param_combos.shape[0]), columns=["Brier Skill Score", "AUC"])
+        param_scores = pd.DataFrame(index=np.arange(param_combos.shape[0]), 
+                                    columns=["Brier Skill Score", "AUC"], dtype=float)
+
         score_outputs = []
         param_train_data = storm_data[train_indices][train_member_indices]
         param_train_labels = hail_labels[train_indices][train_member_indices]
@@ -373,7 +388,7 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
             score_outputs.append(n_pool.apply_async(train_single_sklearn_model,
                                                     (model_name, model_obj, c, param_combos.loc[c].to_dict(),
                                                      out_path),
-                                                    dict(use_gpu=True, device_queue=gpu_queue)))
+                                                    dict(device_queue=gpu_queue)))
         n_pool.close()
         n_pool.join()
         for async_out in score_outputs:
@@ -415,7 +430,7 @@ def evaluate_sklearn_model(model_name, model_obj, storm_data, storm_meta, hail_l
         pool.close()
         pool.join()
         del pool
-        sample_scores.to_csv(join(out_path, "conv_net_sample_scores.csv"), index_label="Sample")
+        sample_scores.to_csv(join(out_path, "{0}_sample_scores.csv".format(model_name)), index_label="Sample")
         #print("Train Best " + model_name)
         #model_inst = model_obj(**param_combos.loc[best_config].to_dict())
         #model_inst.fit(storm_data[train_indices],
