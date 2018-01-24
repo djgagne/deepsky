@@ -183,7 +183,10 @@ def train_best_sklearn_model(model_name, model_obj, best_combo, n, train_labels,
                                                        gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                        log_device_placement=False))
         K.set_session(session)
-        hail_model = model_obj(**best_combo)
+        if model_name == "logistic_gan":
+            hail_model = model_obj(index=n, **best_combo)
+        else:
+            hail_model = model_obj(**best_combo)
         hail_model.fit(train_data,
                        train_labels)
         print("Scoring " + model_name)
