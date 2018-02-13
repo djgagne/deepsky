@@ -3,8 +3,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from keras.layers import Input, Conv2D, LeakyReLU, Activation, BatchNormalization, Dropout, Flatten, Dense
 from keras.optimizers import Adam, SGD
-from keras.losses import binary_crossentropy
-from keras.models import Model, save_model
+from keras.models import Model, save_model, load_model
 import pickle
 import inspect
 from os.path import join
@@ -162,7 +161,7 @@ def save_logistic_gan(log_gan_model, out_path):
     with open(join(out_path, "logistic_gan_{0}_logistic.pkl".format(log_gan_model.index)), "wb") as logistic_file:
         pickle.dump(log_gan_model.logistic, logistic_file, pickle.HIGHEST_PROTOCOL)
 
-    model_args = inspect.getargspec(log_gan_model.__init__).args
+    model_args = inspect.signature(log_gan_model.__init__).args
     if "self" in model_args:
         model_args.remove("self")
     param_dict = {}
@@ -174,6 +173,19 @@ def save_logistic_gan(log_gan_model, out_path):
                   yaml_file,
                   default_flow_style=False)
     return
+
+
+def load_logistic_gan(path, index):
+    with open(join(path, "logistic_gan_{0}_params.yaml".format(index))) as yaml_file:
+        param_dict = yaml.load(yaml_file)
+    gan_obj = LogisticGAN(**param_dict)
+    gan_obj.generator = load_model(join(path, "logistic_gan_{0}_generator.h5".format(index)))
+    gan_obj.discriminator = load_model(join(path, "logistic_gan_{0}_discriminator.h5".format(index)))
+    gan_obj.encoder = load_model(join(path, "logistic_gan_{0}_encoder.h5".format(index)))
+    with open(join(path, "logistic_gan_{0}_logistic.pkl".format(index)), "rb") as logistic_file:
+        gan_obj.logistic = pickle.load(logistic_file)
+    return gan_obj
+
 
 def hail_conv_net(data_width=32, num_input_channels=1, filter_width=5, min_conv_filters=16,
                   filter_growth_rate=2, min_data_width=4,

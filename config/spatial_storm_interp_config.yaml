@@ -1,0 +1,24 @@
+data_path: /scratch/dgagne/ncar_ens_storm_patches/
+out_path: /scratch/dgagne/spatial_storm_results_20171220/
+input_variables:
+  - geopotential_height_500_mb_prev
+  - geopotential_height_700_mb_prev
+  - geopotential_height_850_mb_prev
+  - temperature_500_mb_prev
+  - temperature_700_mb_prev
+  - temperature_850_mb_prev
+  - dew_point_temperature_500_mb_prev
+  - dew_point_temperature_700_mb_prev
+  - dew_point_temperature_850_mb_prev
+  - u-component_of_wind_500_mb_prev
+  - u-component_of_wind_700_mb_prev
+  - u-component_of_wind_850_mb_prev
+  - v-component_of_wind_500_mb_prev
+  - v-component_of_wind_700_mb_prev
+  - v-component_of_wind_850_mb_prev
+output:
+  variable: thompson_max_hail_k1_surface_current
+  mask: mask
+  threshold: 25
+num_permutations: 30
+model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
