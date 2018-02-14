@@ -32,10 +32,10 @@ def main():
     data_path = config["data_path"]
     input_variables = config["input_variables"]
     out_path = config["out_path"]
-    num_permutations = config["importance"]["num_permutations"]
+    num_permutations = config["num_permutations"]
     model_names = config["model_names"]
     print("Loading data")
-    global storm_norm_data, storm_meta, storm_mean_data, hail_labels
+    global storm_norm_data, storm_meta, storm_flat_data, storm_mean_data, hail_labels
     storm_scaling_values = pd.read_csv(join(out_path, "scaling_values.csv"), index_col="Index")
     storm_data, storm_meta = load_storm_patch_data(data_path, input_variables, args.proc)
     storm_norm_data, storm_scaling_values = normalize_multivariate_data(storm_data,
@@ -108,14 +108,10 @@ def importance_model(model_name, model_number, device_queue, input_variables,
             model = load_logistic_gan(output_dir, model_number)
             sklearn_model = True
         else:
-            with open(join(output_dir, "hail_{0}_sample_{0:03d}.pkl".format(model_name,
+            with open(join(output_dir, "hail_{0}_sample_{1:03d}.pkl".format(model_name,
                                                                             model_number)), "rb") as model_pickle:
                 model = pickle.load(model_pickle)
             sklearn_model = True
-        if "mean" in model_name:
-            mean_model = True
-        else:
-            mean_model = False
         sample_preds = pd.read_csv(join(output_dir, "predictions_conv_net_sample_{0:03d}.csv".format(model_number)),
                                    index_col="Index")
         test_dates = sample_preds["run_dates"].unique().astype("U10")
@@ -123,8 +119,17 @@ def importance_model(model_name, model_number, device_queue, input_variables,
         train_dates = all_dates[~np.isin(all_dates, test_dates)]
         train_indices = np.where(np.in1d(storm_meta["run_dates"].values, train_dates))[0]
         var_scores = dict()
+        if "mean" in model_name:
+            mean_model = True
+            imp_data = storm_mean_data[train_indices]
+        elif "pca" in model_name:
+            mean_model = True
+            imp_data = storm_flat_data[train_indices]
+        else:
+            mean_model = False
+            imp_data = storm_norm_data[train_indices]
         for score_name, score_func in score_funcs.items():
-            var_scores[score_name] = variable_importance(storm_norm_data[train_indices],
+            var_scores[score_name] = variable_importance(imp_data,
                                                          hail_labels[train_indices],
                                                          input_variables,
                                                          model_name,

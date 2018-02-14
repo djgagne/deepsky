@@ -179,9 +179,9 @@ def load_logistic_gan(path, index):
     with open(join(path, "logistic_gan_{0}_params.yaml".format(index))) as yaml_file:
         param_dict = yaml.load(yaml_file)
     gan_obj = LogisticGAN(**param_dict)
-    gan_obj.generator = load_model(join(path, "logistic_gan_{0}_generator.h5".format(index)))
-    gan_obj.discriminator = load_model(join(path, "logistic_gan_{0}_discriminator.h5".format(index)))
-    gan_obj.encoder = load_model(join(path, "logistic_gan_{0}_encoder.h5".format(index)))
+    gan_obj.discriminator.load_weights(join(path, "logistic_gan_{0}_discriminator.h5".format(index)))
+    gan_obj.encoder.load_weights(join(path, "logistic_gan_{0}_encoder.h5".format(index)))
+    gan_obj.generator.load_weights(join(path, "logistic_gan_{0}_generator.h5".format(index)))
     with open(join(path, "logistic_gan_{0}_logistic.pkl".format(index)), "rb") as logistic_file:
         gan_obj.logistic = pickle.load(logistic_file)
     return gan_obj

@@ -20,5 +20,11 @@ output:
   variable: thompson_max_hail_k1_surface_current
   mask: mask
   threshold: 25
+sampling:
+  random_seed: 412901
+  num_samples: 30
+  train_split: 0.7
+  member_split: 0.7
 num_permutations: 30
-model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
+# model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
+model_names: ["logistic_mean", "logistic_pca"]
