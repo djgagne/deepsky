@@ -96,11 +96,12 @@ def importance_model(model_name, model_number, device_queue, input_variables,
     try:
         device = int(device_queue.get())
         print("Process {0} {1:d} using GPU {2:d}".format(model_name, model_number, device))
-        environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
-        session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
+        if model_name in ["conv_net", "logistic_gan"]:
+            environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
+            session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
                                                        gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                        log_device_placement=False))
-        K.set_session(session)
+            K.set_session(session)
         if model_name == "conv_net":
             model = load_model(join(output_dir, "hail_conv_net_sample_{0:03d}.h5".format(model_number)))
             sklearn_model = False
@@ -125,6 +126,7 @@ def importance_model(model_name, model_number, device_queue, input_variables,
         elif "pca" in model_name:
             mean_model = True
             imp_data = storm_flat_data[train_indices]
+            print("Using flat data")
         else:
             mean_model = False
             imp_data = storm_norm_data[train_indices]
@@ -142,7 +144,8 @@ def importance_model(model_name, model_number, device_queue, input_variables,
                                                                                                        score_name,
                                                                                                        model_number)),
                                           index_label="Index")
-        session.close()
+        if model_name in ["conv_net", "logistic_gan"]:
+            session.close()
         device_queue.put(device)
     except Exception as e:
         print(traceback.format_exc())

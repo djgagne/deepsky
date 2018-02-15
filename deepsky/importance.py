@@ -14,19 +14,15 @@ def variable_importance(data, labels, variable_names, model_name, model, score_f
     perm_data = np.copy(data)
     var_scores = pd.DataFrame(index=np.arange(permutations + 1), columns=variable_names, dtype=float)
     var_scores.loc[0, :] = score
-    is_flat_data = data.shape[1] == len(variable_names)
-    if is_flat_data:
-        print("Is flat data")
-        var_width = int(data.shape[1] / len(variable_names))
-    else:
-        var_width = 1
+    data_shape_len = len(data.shape)
+    print(data.shape)
     for v, variable in enumerate(variable_names):
         for p in range(1, permutations + 1):
             np.random.shuffle(indices)
-            if mean_model and not is_flat_data:
+            if mean_model and data_shape_len == 2:
                 perm_data[:, v] = data[indices, v]
-            elif mean_model and is_flat_data:
-                perm_data[:, v: v + var_width] = data[indices, v: v + var_width]
+            elif mean_model and data_shape_len == 3:
+                perm_data[:, :, v] = data[indices, :, v]
             else:
                 perm_data[:, :, :, v] = data[indices, :, :, v]
             if sklearn_model:
@@ -34,10 +30,10 @@ def variable_importance(data, labels, variable_names, model_name, model, score_f
             else:
                 perm_preds = model.predict(perm_data)[:, 0]
             var_scores.loc[p, variable] = score_func(labels, perm_preds)
-        if mean_model and not is_flat_data:
+        if mean_model and not data_shape_len == 2:
             perm_data[:, v] = data[:, v]
-        elif mean_model and is_flat_data:
-            perm_data[:, v: v + var_width] = data[:, v: v + var_width]
+        elif mean_model and data_shape_len == 3:
+            perm_data[:, :, v] = data[:, :, v]
         else:
             perm_data[:, :, :, v] = data[:, :, :, v]
         score_diff = var_scores.loc[1:, variable] - var_scores.loc[0, variable]

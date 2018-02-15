@@ -27,4 +27,4 @@ sampling:
   member_split: 0.7
 num_permutations: 30
 # model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
-model_names: ["logistic_mean", "logistic_pca"]
+model_names: ["logistic_pca"]
