@@ -9,6 +9,8 @@ from deepsky.gan import normalize_multivariate_data
 from deepsky.importance import variable_importance
 from deepsky.metrics import brier_skill_score, roc_auc
 from deepsky.models import load_logistic_gan
+from sklearn.manifold import TSNE, Isomap, MDS, LocallyLinearEmbedding
+from sklearn.decomposition import PCA
 from multiprocessing import Pool, Manager
 import traceback
 import keras.backend as K
@@ -20,7 +22,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config", help="Config yaml file")
     parser.add_argument("-i", "--imp", action="store_true", help="Calculate Variable Importance")
-    parser.add_argument("-e", "--emb", action="store_true", help="Calculate and visualize model embedding")
+    parser.add_argument("-e", "--enc", action="store_true", help="Calculate and visualize model encoding")
     parser.add_argument("-m", "--max", action="store_true", help="Find examples that maximize activations")
     parser.add_argument("-p", "--proc", type=int, default=1, help="Number of processors")
     args = parser.parse_args()
@@ -34,8 +36,9 @@ def main():
     out_path = config["out_path"]
     num_permutations = config["num_permutations"]
     model_names = config["model_names"]
+    encoding = config["encoding"]
     print("Loading data")
-    global storm_norm_data, storm_meta, storm_flat_data, storm_mean_data, hail_labels
+    global storm_norm_data, storm_meta, storm_flat_data, storm_mean_data, hail_labels, max_hail
     storm_scaling_values = pd.read_csv(join(out_path, "scaling_values.csv"), index_col="Index")
     storm_data, storm_meta = load_storm_patch_data(data_path, input_variables, args.proc)
     storm_norm_data, storm_scaling_values = normalize_multivariate_data(storm_data,
@@ -55,6 +58,8 @@ def main():
     if args.imp:
         importance_manager(out_path, model_names, input_variables, sampling_config["num_samples"],
                            num_permutations, score_funcs, args.proc)
+    if args.enc:
+        encoding_manager(out_path, model_names, num_permutations, encoding, args.proc)
     return
 
 
@@ -154,6 +159,80 @@ def importance_model(model_name, model_number, device_queue, input_variables,
         raise e
     return
 
+
+def encoding_manager(output_dir, model_names, num_models, enc_2d_methods, num_procs):
+    pool = Pool(num_procs, maxtasksperchild=1)
+    gpu_manager = Manager()
+    gpu_queue = gpu_manager.Queue()
+    for g in range(num_procs):
+        gpu_queue.put(g)
+    for model_number in range(num_models):
+        for model_name in model_names:
+            pool.apply_async(model_encoder, (model_name, model_number, gpu_queue, enc_2d_methods, output_dir))
+    pool.close()
+    pool.join()
+
+
+def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output_dir):
+    device = None
+    try:
+        device = int(device_queue.get())
+        print("Process {0} {1:d} using GPU {2:d}".format(model_name, model_number, device))
+        if model_name in ["conv_net", "logistic_gan"]:
+            environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
+            session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
+                                                           gpu_options=K.tf.GPUOptions(allow_growth=True),
+                                                           log_device_placement=False))
+            K.set_session(session)
+        if model_name == "conv_net":
+            model = load_model(join(output_dir, "hail_conv_net_sample_{0:03d}.h5".format(model_number)))
+            pred_func = K.function([model.input], [model.layers[-3].output])
+            encoding = pred_func([storm_norm_data])[0]
+            prediction = model.predict(storm_norm_data)[:, 0]
+        elif model_name == "logistic_gan":
+            model = load_logistic_gan(output_dir, model_number)
+            encoding = model.encoder.predict(storm_norm_data)
+            prediction = model.predict_proba(storm_norm_data)[:, 1]
+        else:
+            with open(join(output_dir, "hail_{0}_sample_{1:03d}.pkl".format(model_name,
+                                                                            model_number)), "rb") as model_pickle:
+                model = pickle.load(model_pickle)
+            if model_name == "logistic_pca":
+                encoding = model.transform(storm_flat_data)
+            else:
+                encoding = storm_mean_data
+            prediction = model.predict_proba(storm_norm_data)[:, 1]
+        encoding_cols = ["E{0:03d}".format(e) for e in range(encoding.shape[1])]
+        en_frame = pd.DataFrame(encoding, columns=encoding_cols)
+        enc_2d_data = []
+        for enc_name, enc_params in enc_2d_methods.items():
+            if enc_name == "tsne":
+                enc_2d_model = TSNE(**enc_params)
+            elif enc_name == "isomap":
+                enc_2d_model = Isomap(**enc_params)
+            elif enc_name == "lle":
+                enc_2d_model = LocallyLinearEmbedding(**enc_params)
+            elif enc_name == "mds":
+                enc_2d_model = MDS(**enc_params)
+            elif enc_name == "pca":
+                enc_2d_model = PCA(**enc_params)
+            else:
+                print(enc_name + " not supported.")
+                enc_2d_model = None
+            if enc_2d_model is not None:
+                enc_2d_cols = [enc_name + "_{0:02d}".format(c) for c in range(enc_2d_model.n_components)]
+                enc_2d_data.append(pd.DataFrame(enc_2d_model.fit_transform(encoding), columns=enc_2d_cols))
+        label_frame = pd.DataFrame(np.column_stack((prediction, hail_labels, max_hail)),
+                                   columns=["{0}_{1:03d}_prob_severe_hail".format(model_name, model_number),
+                                            "is_severe_hail", "max_hail_size"])
+        out_frame = pd.concat([storm_meta, en_frame] + enc_2d_data + [label_frame], axis=1)
+        out_frame.to_csv(join(output_dir, "encoding_{0}_{1:03d}.csv".format(model_name, model_number)),
+                         index_label="Index")
+    except Exception as e:
+        print(traceback.format_exc())
+        if device is not None:
+            device_queue.put(device)
+        raise e
 
 
 if __name__ == "__main__":
