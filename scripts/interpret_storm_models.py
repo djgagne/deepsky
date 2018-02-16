@@ -202,6 +202,12 @@ def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output
             else:
                 encoding = storm_mean_data
             prediction = model.predict_proba(storm_norm_data)[:, 1]
+        sample_preds = pd.read_csv(join(output_dir, "predictions_conv_net_sample_{0:03d}.csv".format(model_number)),
+                                   index_col="Index")
+        test_dates = sample_preds["run_dates"].unique().astype("U10")
+        all_dates = storm_meta["run_dates"].unique().astype("U10")
+        train_dates = all_dates[~np.isin(all_dates, test_dates)]
+        train_indices = np.where(np.in1d(storm_meta["run_dates"].values, train_dates), 1, 0)
         encoding_cols = ["E{0:03d}".format(e) for e in range(encoding.shape[1])]
         en_frame = pd.DataFrame(encoding, columns=encoding_cols)
         enc_2d_data = []
@@ -222,8 +228,9 @@ def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output
             if enc_2d_model is not None:
                 enc_2d_cols = [enc_name + "_{0:02d}".format(c) for c in range(enc_2d_model.n_components)]
                 enc_2d_data.append(pd.DataFrame(enc_2d_model.fit_transform(encoding), columns=enc_2d_cols))
-        label_frame = pd.DataFrame(np.column_stack((prediction, hail_labels, max_hail)),
-                                   columns=["{0}_{1:03d}_prob_severe_hail".format(model_name, model_number),
+        label_frame = pd.DataFrame(np.column_stack((train_indices, prediction, hail_labels, max_hail)),
+                                   columns=["is_training",
+                                            "{0}_{1:03d}_prob_severe_hail".format(model_name, model_number),
                                             "is_severe_hail", "max_hail_size"])
         out_frame = pd.concat([storm_meta, en_frame] + enc_2d_data + [label_frame], axis=1)
         out_frame.to_csv(join(output_dir, "encoding_{0}_{1:03d}.csv".format(model_name, model_number)),

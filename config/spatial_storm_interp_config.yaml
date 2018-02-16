@@ -26,5 +26,13 @@ sampling:
   train_split: 0.7
   member_split: 0.7
 num_permutations: 30
-# model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
-model_names: ["logistic_pca"]
+model_names: ["logistic_gan", "conv_net", "logistic_mean", "logistic_pca"]
+encoding:
+  tsne:
+    n_components: 2
+  pca:
+    n_components: 2
+  lle:
+    n_components: 2
+    eigen_solver: arpack
+    method: modified
