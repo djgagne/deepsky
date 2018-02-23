@@ -77,5 +77,5 @@ def variable_importance_faster(data, labels, variable_names, model_name, model, 
                 perm_data[:, :, v] = data[:, :, v]
             else:
                 perm_data[:, :, :, v] = data[:, :, :, v]
-            print(model)
+            print(model_name, variable)
     return var_scores
