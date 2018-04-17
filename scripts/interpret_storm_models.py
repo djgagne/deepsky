@@ -55,11 +55,12 @@ def main():
     max_hail *= 1000
     hail_labels = np.where(max_hail >= output_config["threshold"], 1, 0)
     score_funcs = {"auc": roc_auc, "bss": brier_skill_score}
+    batch_size = 128
     if args.imp:
         importance_manager(out_path, model_names, input_variables, sampling_config["num_samples"],
                            num_permutations, score_funcs, args.proc)
     if args.enc:
-        encoding_manager(out_path, model_names, num_permutations, encoding, args.proc)
+        encoding_manager(out_path, model_names, num_permutations, encoding, args.proc, batch_size)
     return
 
 
@@ -160,7 +161,7 @@ def importance_model(model_name, model_number, device_queue, input_variables,
     return
 
 
-def encoding_manager(output_dir, model_names, num_models, enc_2d_methods, num_procs):
+def encoding_manager(output_dir, model_names, num_models, enc_2d_methods, num_procs, batch_size):
     pool = Pool(num_procs, maxtasksperchild=1)
     gpu_manager = Manager()
     gpu_queue = gpu_manager.Queue()
@@ -168,40 +169,58 @@ def encoding_manager(output_dir, model_names, num_models, enc_2d_methods, num_pr
         gpu_queue.put(g)
     for model_number in range(num_models):
         for model_name in model_names:
-            pool.apply_async(model_encoder, (model_name, model_number, gpu_queue, enc_2d_methods, output_dir))
+            pool.apply_async(model_encoder, (model_name, model_number, gpu_queue, enc_2d_methods, output_dir, batch_size))
     pool.close()
     pool.join()
 
 
-def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output_dir):
+def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output_dir, batch_size):
     device = None
     try:
-        device = int(device_queue.get())
-        print("Process {0} {1:d} using GPU {2:d}".format(model_name, model_number, device))
+        device = -1 
         if model_name in ["conv_net", "logistic_gan"]:
+            device = int(device_queue.get())
             environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
             session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
                                                            gpu_options=K.tf.GPUOptions(allow_growth=True),
                                                            log_device_placement=False))
             K.set_session(session)
+        print("Process {0} {1:d} using GPU {2:d}".format(model_name, model_number, device))
         if model_name == "conv_net":
             model = load_model(join(output_dir, "hail_conv_net_sample_{0:03d}.h5".format(model_number)))
-            pred_func = K.function([model.input], [model.layers[-3].output])
-            encoding = pred_func([storm_norm_data])[0]
+            pred_func = K.function([model.input, K.learning_phase()], [model.layers[-3].output]) 
+            print(model_name, model_number, "Generating encoding")
+            batch_indices = list(range(0, storm_norm_data.shape[0], batch_size)) + [storm_norm_data.shape[0]]
+            enc_batches = []
+            for b, bi in enumerate(batch_indices[:-1]):
+                enc_batches.append(pred_func([storm_norm_data[bi: batch_indices[b + 1]], 0])[0])
+            encoding = np.vstack(enc_batches)
+            print(model_name, model_number, encoding.shape)
+            print(model_name, model_number, "Generating prediction")
             prediction = model.predict(storm_norm_data)[:, 0]
         elif model_name == "logistic_gan":
             model = load_logistic_gan(output_dir, model_number)
+            print(model_name, model_number, "Generating encoding")
             encoding = model.encoder.predict(storm_norm_data)
+            print(model_name, model_number, encoding.shape)
+            print(model_name, model_number, "Generating prediction")
             prediction = model.predict_proba(storm_norm_data)[:, 1]
         else:
             with open(join(output_dir, "hail_{0}_sample_{1:03d}.pkl".format(model_name,
                                                                             model_number)), "rb") as model_pickle:
                 model = pickle.load(model_pickle)
             if model_name == "logistic_pca":
+                print(model_name, model_number, "Generating encoding")
                 encoding = model.transform(storm_flat_data)
+                print(model_name, model_number, encoding.shape)
+                print(model_name, model_number, "Generating prediction")
+                prediction = model.predict_proba(storm_flat_data)[:, 1]
             else:
+                print(model_name, model_number, "Generating encoding")
                 encoding = storm_mean_data
-            prediction = model.predict_proba(storm_norm_data)[:, 1]
+                print(model_name, model_number, encoding.shape)
+                print(model_name, model_number, "Generating prediction")
+                prediction = model.predict_proba(storm_mean_data)[:, 1]
         sample_preds = pd.read_csv(join(output_dir, "predictions_conv_net_sample_{0:03d}.csv".format(model_number)),
                                    index_col="Index")
         test_dates = sample_preds["run_dates"].unique().astype("U10")
@@ -210,29 +229,33 @@ def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output
         train_indices = np.where(np.in1d(storm_meta["run_dates"].values, train_dates), 1, 0)
         encoding_cols = ["E{0:03d}".format(e) for e in range(encoding.shape[1])]
         en_frame = pd.DataFrame(encoding, columns=encoding_cols)
-        enc_2d_data = []
-        for enc_name, enc_params in enc_2d_methods.items():
-            if enc_name == "tsne":
-                enc_2d_model = TSNE(**enc_params)
-            elif enc_name == "isomap":
-                enc_2d_model = Isomap(**enc_params)
-            elif enc_name == "lle":
-                enc_2d_model = LocallyLinearEmbedding(**enc_params)
-            elif enc_name == "mds":
-                enc_2d_model = MDS(**enc_params)
-            elif enc_name == "pca":
-                enc_2d_model = PCA(**enc_params)
-            else:
-                print(enc_name + " not supported.")
-                enc_2d_model = None
-            if enc_2d_model is not None:
-                enc_2d_cols = [enc_name + "_{0:02d}".format(c) for c in range(enc_2d_model.n_components)]
-                enc_2d_data.append(pd.DataFrame(enc_2d_model.fit_transform(encoding), columns=enc_2d_cols))
+        #enc_2d_data = []
+        #for enc_name, enc_params in enc_2d_methods.items():
+        #    print(model_name, model_number, enc_name)
+        #    if enc_name == "tsne":
+        #        enc_2d_model = TSNE(**enc_params)
+        #    elif enc_name == "isomap":
+        #        enc_2d_model = Isomap(**enc_params)
+        #    elif enc_name == "lle":
+        #        enc_2d_model = LocallyLinearEmbedding(**enc_params)
+        #    elif enc_name == "mds":
+        #        enc_2d_model = MDS(**enc_params)
+        #    elif enc_name == "pca":
+        #        enc_2d_model = PCA(**enc_params)
+        #    else:
+        #        print(enc_name + " not supported.")
+        #        enc_2d_model = None
+        #    if enc_2d_model is not None:
+        #        enc_2d_cols = [enc_name + "_{0:02d}".format(c) for c in range(enc_2d_model.n_components)]
+        #        enc_2d_data.append(pd.DataFrame(enc_2d_model.fit_transform(encoding), columns=enc_2d_cols))
+        #
+        print(model_name, model_number, "Merging data")
         label_frame = pd.DataFrame(np.column_stack((train_indices, prediction, hail_labels, max_hail)),
                                    columns=["is_training",
                                             "{0}_{1:03d}_prob_severe_hail".format(model_name, model_number),
                                             "is_severe_hail", "max_hail_size"])
-        out_frame = pd.concat([storm_meta, en_frame] + enc_2d_data + [label_frame], axis=1)
+        out_frame = pd.concat([storm_meta, en_frame, label_frame], axis=1)
+        print(model_name, model_number, "Saving data")
         out_frame.to_csv(join(output_dir, "encoding_{0}_{1:03d}.csv".format(model_name, model_number)),
                          index_label="Index")
     except Exception as e:

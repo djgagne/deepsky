@@ -32,7 +32,3 @@ encoding:
     n_components: 2
   pca:
     n_components: 2
-  lle:
-    n_components: 2
-    eigen_solver: arpack
-    method: modified
