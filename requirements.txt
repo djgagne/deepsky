@@ -1,0 +1,12 @@
+numpy >= 1.12
+pandas
+scipy
+matplotlib >= 2.0
+tensorflow >= 1.6
+keras >= 2.0
+xarray
+netcdf4
+scikit-learn >= 0.19
+pyyaml
+numba
+

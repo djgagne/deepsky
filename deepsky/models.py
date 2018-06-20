@@ -3,7 +3,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from keras.layers import Input, Conv2D, LeakyReLU, Activation, BatchNormalization, Dropout, Flatten, Dense
 from keras.optimizers import Adam, SGD
-from keras.models import Model, save_model, load_model
+from keras.models import Model, save_model
 import pickle
 import inspect
 from os.path import join
@@ -50,8 +50,9 @@ class LogisticPCA(BaseEstimator):
 
 class LogisticGAN(BaseEstimator):
     def __init__(self, data_width=32, num_input_channels=15, filter_width=5, min_conv_filters=16,
-                 min_data_width=4, encoding_channels=100, activation="relu",
-                 dropout_alpha=0, output_activation="linear", stride=2, num_epochs=10,
+                 min_data_width=4, encoding_channels=100, activation="relu", use_dropout=False,
+                 dropout_alpha=0, output_activation="linear", use_noise=False,
+                 noise_sd=0.1, pooling="mean", stride=2, num_epochs=10,
                  batch_size=128, learning_rate=0.001, beta_one=0.5, index=0, penalty="l1", C=0.01):
         self.data_width = data_width
         self.index = index
@@ -61,7 +62,11 @@ class LogisticGAN(BaseEstimator):
         self.min_data_width = min_data_width
         self.encoding_channels = encoding_channels
         self.activation = activation
+        self.use_dropout = use_dropout
         self.dropout_alpha = dropout_alpha
+        self.use_noise = use_noise
+        self.noise_sd = noise_sd
+        self.pooling = pooling
         self.output_activation = output_activation
         self.stride = stride
         self.num_epochs = num_epochs
@@ -71,34 +76,45 @@ class LogisticGAN(BaseEstimator):
         self.penalty = penalty
         self.C = C
         self.gen, self.gen_input = generator_model(input_size=self.encoding_channels,
-                                                     filter_width=self.filter_width,
-                                                     min_data_width=self.min_data_width,
-                                                     min_conv_filters=min_conv_filters,
-                                                     output_size=(self.data_width, self.data_width,
-                                                                  self.num_input_channels),
-                                                     stride=self.stride,
-                                                     activation=self.activation,
-                                                     output_activation=self.output_activation,
-                                                     dropout_alpha=self.dropout_alpha)
+                                                   filter_width=self.filter_width,
+                                                   min_data_width=self.min_data_width,
+                                                   min_conv_filters=min_conv_filters,
+                                                   output_size=(self.data_width, self.data_width,
+                                                                self.num_input_channels),
+                                                   stride=self.stride,
+                                                   activation=self.activation,
+                                                   output_activation=self.output_activation,
+                                                   use_dropout=self.use_dropout,
+                                                   dropout_alpha=self.dropout_alpha,
+                                                   use_noise=self.use_noise,
+                                                   noise_sd=self.noise_sd)
         self.disc, self.disc_input = discriminator_model(input_size=(self.data_width,
-                                                               self.data_width,
-                                                               self.num_input_channels),
-                                                   filter_width=self.filter_width,
-                                                   min_data_width=self.min_data_width,
-                                                   min_conv_filters=self.min_conv_filters,
-                                                   stride=self.stride,
-                                                   activation=self.activation,
-                                                   dropout_alpha=self.dropout_alpha)
+                                                                     self.data_width,
+                                                                     self.num_input_channels),
+                                                         filter_width=self.filter_width,
+                                                         min_data_width=self.min_data_width,
+                                                         min_conv_filters=self.min_conv_filters,
+                                                         stride=self.stride,
+                                                         activation=self.activation,
+                                                         use_dropout=self.use_dropout,
+                                                         dropout_alpha=self.dropout_alpha,
+                                                         use_noise=self.use_noise,
+                                                         noise_sd=self.noise_sd,
+                                                         pooling=self.pooling)
         self.enc, self.enc_input = encoder_model(input_size=(self.data_width,
-                                                   self.data_width,
-                                                   self.num_input_channels),
-                                                   filter_width=self.filter_width,
-                                                   min_data_width=self.min_data_width,
-                                                   min_conv_filters=self.min_conv_filters,
-                                                   output_size=self.encoding_channels,
-                                                   stride=self.stride,
-                                                   activation=self.activation,
-                                                   dropout_alpha=self.dropout_alpha)
+                                                             self.data_width,
+                                                             self.num_input_channels),
+                                                 filter_width=self.filter_width,
+                                                 min_data_width=self.min_data_width,
+                                                 min_conv_filters=self.min_conv_filters,
+                                                 output_size=self.encoding_channels,
+                                                 stride=self.stride,
+                                                 activation=self.activation,
+                                                 use_dropout=self.use_dropout,
+                                                 dropout_alpha=self.dropout_alpha,
+                                                 use_noise=self.use_noise,
+                                                 noise_sd=self.noise_sd,
+                                                 pooling=self.pooling)
 
         optimizer = Adam(lr=self.learning_rate, beta_1=self.beta_one, clipnorm=1.)
         self.discriminator = Model(self.disc_input, self.disc)

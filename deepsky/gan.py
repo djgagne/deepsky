@@ -2,8 +2,8 @@ from __future__ import division
 import numpy as np
 import pandas as pd
 from keras.models import Sequential, Model
-from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, Conv1D, AlphaDropout
-from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, BatchNormalization
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, UpSampling2D, MaxPool2D
+from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, GaussianNoise, AveragePooling2D
 from keras.regularizers import l2
 import xarray as xr
 from os.path import join
@@ -12,7 +12,8 @@ import keras.backend as K
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="relu",
-                    output_activation="linear", dropout_alpha=0):
+                    output_activation="linear", use_dropout=False, dropout_alpha=0,
+                    use_noise=False, noise_sd=0.1):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -26,7 +27,11 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
         stride (int): Number of pixels that the convolution filter shifts between operations.
         activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
         output_activation (str): Type of activation used on the output layer
-        dropout_alpha (float): proportion of nodes dropped out
+        use_dropout (bool): Whether to use Dropout layers or not.
+        dropout_alpha (float): proportion of nodes dropped out.
+        use_noise: Whether to use a Gaussian noise layer after a convolution.
+        noise_sd: Standard deviation of the Gaussian noise.
+
     Returns:
         Model output graph, model input
     """
@@ -43,25 +48,27 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     for i in range(1, num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, (filter_width, filter_width),
-                                  strides=(stride, stride), padding="same", kernel_regularizer=l2())(model)
+                                strides=(stride, stride), padding="same", kernel_regularizer=l2())(model)
         if activation == "leaky":
             model = LeakyReLU(alpha=0.2)(model)
         else:
             model = Activation(activation)(model)
-        if activation == "selu":
-            model = AlphaDropout(dropout_alpha)(model)
-        else:
+        if use_dropout:
             model = Dropout(dropout_alpha)(model)
+        if use_noise:
+            model = GaussianNoise(noise_sd)(model)
+        if stride == 1:
+            model = UpSampling2D()(model)
     model = Conv2DTranspose(output_size[-1], (filter_width, filter_width),
-                              strides=(stride, stride),
-                              padding="same", kernel_regularizer=l2())(model)
+                            strides=(stride, stride),
+                            padding="same", kernel_regularizer=l2())(model)
     model = Activation(output_activation)(model)
     return model, vector_input
 
 
 def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
                   min_conv_filters=64, output_size=100, stride=2, activation="relu", output_activation="linear",
-                  dropout_alpha=0):
+                  use_dropout=False, dropout_alpha=0, use_noise=False, noise_sd=0.1, pooling="mean"):
     """
     Creates an encoder convolutional neural network that reproduces the generator input vector. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -75,7 +82,11 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         stride (int): Number of pixels that the convolution filter shifts between operations.
         activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
         output_activation (str): Type of activation used on the output layer
-        dropout_alpha (float): Proportion of nodes dropped out during training.
+        use_dropout (bool): Whether to use Dropout layers or not.
+        dropout_alpha (float): proportion of nodes dropped out.
+        use_noise (bool): Whether to use a Gaussian noise layer after a convolution.
+        noise_sd (float): Standard deviation of the Gaussian noise.
+        pooling (str): Type of pooling to use if stride=1. Options: "mean" or "max".
     Returns:
         Keras convolutional neural network.
     """
@@ -91,13 +102,18 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
             model = Conv2D(curr_conv_filters, (filter_width, filter_width),
                            strides=(stride, stride), padding="same", kernel_regularizer=l2())(model)
         if activation == "leaky":
-            model = LeakyReLU(alpha=0.2)(model)
+            model = LeakyReLU(0.2)(model)
         else:
             model = Activation(activation)(model)
-        if activation == "selu":
-            model = AlphaDropout(dropout_alpha)(model)
-        else:
+        if use_dropout:
             model = Dropout(dropout_alpha)(model)
+        if use_noise:
+            model = GaussianNoise(noise_sd)(model)
+        if stride == 1:
+            if pooling.lower() == "mean":
+                model = AveragePooling2D()(model)
+            else:
+                model = MaxPool2D()(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     model = Dense(output_size)(model)
@@ -108,7 +124,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
 def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
                        min_conv_filters=64, output_size=100, stride=2, activation="relu",
                        encoder_output_activation="linear",
-                       dropout_alpha=0):
+                       use_dropout=False, dropout_alpha=0, use_noise=False, noise_sd=0.1, pooling="mean"):
     """
     Creates an encoder/discriminator convolutional neural network that reproduces the generator input vector.
     The keyword arguments allow aspects of the structure of the enocder/discriminator to be tuned
@@ -123,7 +139,12 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
         stride (int): Number of pixels that the convolution filter shifts between operations.
         activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
         encoder_output_activation (str): Type of activation used on the output layer
-        dropout_alpha (float): Proportion of nodes dropped out during training.
+        use_dropout (bool): Whether to use Dropout layers or not.
+        dropout_alpha (float): proportion of nodes dropped out.
+        use_noise (bool): Whether to use a Gaussian noise layer after a convolution.
+        noise_sd (float): Standard deviation of the Gaussian noise.
+        pooling (str): Type of pooling to use if stride=1. Options: "mean" or "max".
+
     Returns:
         discriminator model output, encoder model output, image input
     """
@@ -138,10 +159,15 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
             model = LeakyReLU(0.2)(model)
         else:
             model = Activation(activation)(model)
-        if activation == "selu":
-            model = AlphaDropout(dropout_alpha)(model)
-        else:
+        if use_dropout:
             model = Dropout(dropout_alpha)(model)
+        if use_noise:
+            model = GaussianNoise(noise_sd)(model)
+        if stride == 1:
+            if pooling.lower() == "mean":
+                model = AveragePooling2D()(model)
+            else:
+                model = MaxPool2D()(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     enc_model = Dense(int(0.5 * curr_conv_filters * filter_width ** 2))(model)
@@ -158,7 +184,8 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
                         min_conv_filters=64, min_data_width=4, activation="relu",
-                        dropout_alpha=0):
+                        use_dropout=False, dropout_alpha=0, use_noise=False, noise_sd=0,
+                        pooling="mean"):
     """
     Creates an discriminator convolutional neural network that reproduces the generator input vector.
     The keyword arguments allow aspects of the structure of the discriminator to be tuned for optimal performance.
@@ -168,11 +195,14 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
         filter_width (int): Width of each convolutional filter
         min_data_width (int): Width of the last convolved layer
         min_conv_filters (int): Number of convolutional filters in the first convolutional layer
-        output_size (int): Dimensions of the output
         stride (int): Number of pixels that the convolution filter shifts between operations.
         activation (str): Type of activation used for convolutional layers. Use "leaky" for Leaky ReLU.
-        encoder_output_activation (str): Type of activation used on the output layer
-        dropout_alpha (float): Proportion of nodes dropped out during training.
+        use_dropout (bool): Whether to use Dropout layers or not.
+        dropout_alpha (float): proportion of nodes dropped out.
+        use_noise (bool): Whether to use a Gaussian noise layer after a convolution.
+        noise_sd (float): Standard deviation of the Gaussian noise.
+        pooling (str): Type of pooling to use if stride=1. Options: "mean" or "max".
+
     Returns:
         discriminator model output, encoder model output, image input
     """
@@ -190,10 +220,15 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
             model = LeakyReLU(0.2)(model)
         else:
             model = Activation(activation)(model)
-        if activation == "selu":
-            model = AlphaDropout(dropout_alpha)(model)
-        else:
+        if use_dropout:
             model = Dropout(dropout_alpha)(model)
+        if use_noise:
+            model = GaussianNoise(noise_sd)(model)
+        if stride == 1:
+            if pooling.lower() == "mean":
+                model = AveragePooling2D()(model)
+            else:
+                model = MaxPool2D()(model)
         curr_conv_filters *= 2
     model = Flatten()(model)
     disc_model = Dense(1)(model)
