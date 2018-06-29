@@ -100,7 +100,7 @@ def activated_analogs(norm_data, cnn_model, num_analogs=16, filter_index=(0, 0),
         top_analog_activations (the magnitude of the activation), top_analog_gradients (gradients with respect
         to the input for each of the top analogs)
     """
-    dense_weights = pd.Series(cnn_model.layers[dense_layer_index].get_weights().reshape(
+    dense_weights = pd.Series(cnn_model.layers[dense_layer_index].get_weights()[0].reshape(
         cnn_model.layers[conv_layer_index].output_shape[1:])[filter_index], name="Weights")
     top_analog_ids = pd.DataFrame(np.zeros((dense_weights.shape[-1], num_analogs), dtype=int),
                                   columns=["Analog_ID_{0:02d}".format(a) for a in range(num_analogs)])
@@ -108,16 +108,17 @@ def activated_analogs(norm_data, cnn_model, num_analogs=16, filter_index=(0, 0),
                                           columns=["Analog_Act_{0:02d}".format(a) for a in range(num_analogs)])
     top_analog_gradients = np.zeros([dense_weights.shape[-1], num_analogs] + list(norm_data.shape[1:]))
     for w in range(dense_weights.shape[-1]):
+        print(w, dense_weights[w])
         filter_out = cnn_model.layers[conv_layer_index].output[:, filter_index[0], filter_index[1], w]
         act_func = K.function([cnn_model.input, K.learning_phase()],
                               [filter_out])
-        loss = (filter_out - 4) ** 2
+        loss = (filter_out - 2) ** 2
         grad = K.gradients(loss, cnn_model.input)[0]
         grad /= K.maximum(K.std(grad), K.epsilon())
         grad_func = K.function([cnn_model.input, K.learning_phase()], [grad])
         max_acts = act_func([norm_data, 0])[0]
         top_analog_ids.loc[w] = np.argsort(max_acts)[::-1][:num_analogs]
-        top_analog_activations.loc[w] = max_acts[top_analog_ids[w]]
-        top_analog_gradients[w] = grad_func([norm_data[top_analog_ids], 0])[0]
+        top_analog_activations.loc[w] = max_acts[top_analog_ids.loc[w]]
+        top_analog_gradients[w] = grad_func([norm_data[top_analog_ids.loc[w]], 0])[0]
     combined_info = pd.concat([top_analog_ids, top_analog_activations, dense_weights], axis=1)
     return combined_info, top_analog_gradients
