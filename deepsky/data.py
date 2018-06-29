@@ -40,6 +40,17 @@ def load_storm_data_file(data_file, variable_names):
 
 
 def load_storm_patch_data(data_path, variable_names, n_procs):
+    """
+
+
+    Args:
+        data_path:
+        variable_names:
+        n_procs:
+
+    Returns:
+
+    """
     data_patches = []
     data_meta = []
 

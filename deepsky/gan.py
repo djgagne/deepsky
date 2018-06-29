@@ -12,7 +12,7 @@ import keras.backend as K
 
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="relu",
-                    output_activation="linear", use_dropout=False, dropout_alpha=0,
+                    use_dropout=False, dropout_alpha=0,
                     use_noise=False, noise_sd=0.1):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
@@ -36,16 +36,16 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
         Model output graph, model input
     """
     num_layers = int(np.log2(output_size[0]) - np.log2(min_data_width))
-    max_conv_filters = int(min_conv_filters * 2 ** (num_layers - 1))
+    max_conv_filters = int(min_conv_filters * 2 ** (num_layers))
     curr_conv_filters = max_conv_filters
     vector_input = Input(shape=(input_size, ), name="gen_input")
-    model = Dense(units=max_conv_filters * min_data_width * min_data_width)(vector_input)
+    model = Dense(units=max_conv_filters * min_data_width * min_data_width, kernel_regularizer=l2(0.001))(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
     if activation == "leaky":
         model = LeakyReLU(alpha=0.2)(model)
     else:
         model = Activation(activation)(model)
-    for i in range(1, num_layers):
+    for i in range(num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, (filter_width, filter_width),
                                 strides=(stride, stride), padding="same", kernel_regularizer=l2())(model)
@@ -60,10 +60,10 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
         if stride == 1:
             model = UpSampling2D()(model)
     model = Conv2DTranspose(output_size[-1], (filter_width, filter_width),
-                            strides=(stride, stride),
+                            strides=(1, 1),
                             padding="same", kernel_regularizer=l2())(model)
-    model = Activation(output_activation)(model)
-    return model, vector_input
+    model_out = Model(vector_input, model)
+    return model_out
 
 
 def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
@@ -115,10 +115,13 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
             else:
                 model = MaxPool2D()(model)
         curr_conv_filters *= 2
+    model = Conv2D(curr_conv_filters, (filter_width, filter_width),
+                       strides=(1, 1), padding="same", kernel_regularizer=l2())(model)
     model = Flatten()(model)
     model = Dense(output_size)(model)
     model = Activation(output_activation)(model)
-    return model, image_input
+    model_out = Model(image_input, model)
+    return model_out
 
 
 def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
@@ -230,10 +233,13 @@ def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
             else:
                 model = MaxPool2D()(model)
         curr_conv_filters *= 2
+    model = Conv2D(curr_conv_filters, (filter_width, filter_width),
+                   strides=(1, 1), padding="same", kernel_regularizer=l2())(model)
     model = Flatten()(model)
     disc_model = Dense(1)(model)
     disc_model = Activation("sigmoid")(disc_model)
-    return disc_model, image_input
+    model_out = Model(image_input, disc_model)
+    return model_out
 
 
 def joint_discriminator_model(gen_model, enc_model, image_input, vector_input, stride=2, filter_width=5,

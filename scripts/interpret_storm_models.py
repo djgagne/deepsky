@@ -6,11 +6,9 @@ from os import environ
 from os.path import join
 from deepsky.data import load_storm_patch_data
 from deepsky.gan import normalize_multivariate_data
-from deepsky.importance import variable_importance
+from deepsky.importance import variable_importance, activated_analogs
 from deepsky.metrics import brier_skill_score, roc_auc
 from deepsky.models import load_logistic_gan
-from sklearn.manifold import TSNE, Isomap, MDS, LocallyLinearEmbedding
-from sklearn.decomposition import PCA
 from multiprocessing import Pool, Manager
 import traceback
 import keras.backend as K
@@ -265,5 +263,30 @@ def model_encoder(model_name, model_number, device_queue, enc_2d_methods, output
         raise e
 
 
+def interpret_neuron_activations(model_name, model_number, device_queue, output_dir, num_analogs,
+                                 dense_layer_index=-2, conv_layer_index=-6):
+    device = int(device_queue.get())
+    environ["CUDA_VISIBLE_DEVICES"] = "{0:d}".format(device)
+    session = K.tf.Session(config=K.tf.ConfigProto(allow_soft_placement=False,
+                                                   gpu_options=K.tf.GPUOptions(allow_growth=True),
+                                                   log_device_placement=False))
+    K.set_session(session)
+    model = load_model(join(output_dir, "hail_conv_net_sample_{0:03d}.h5".format(model_number)))
+    for i in range(4):
+        for j in range(4):
+            combined_info, top_gradients = activated_analogs(storm_norm_data, model, num_analogs,
+                                                             filter_index=(i, j),
+                                                             dense_layer_index=dense_layer_index,
+                                                             conv_layer_index=conv_layer_index)
+            combined_info.to_csv(join(output_dir, "activated_analogs_{0}_{1:03d}_{2:d}_{3:d}.csv".format(model_name,
+                                                                                                         model_number,
+                                                                                                         i,
+                                                                                                         j)),
+                                 index_col="Index")
+            np.save(join(output_dir, "activated_gradients_{0}_{1:03d}_{2:d}_{3:d}.npy".format(model_name,
+                                                                                              model_number,
+                                                                                              i, j)),
+                    top_gradients)
+    return
 if __name__ == "__main__":
     main()
