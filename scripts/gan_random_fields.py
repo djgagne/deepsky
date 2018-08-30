@@ -15,6 +15,12 @@ from keras.optimizers import Adam
 
 def main():
     gan_path = "/glade/scratch/dgagne/random_gan/"
+    if not exists(gan_path):
+        os.mkdir(gan_path)
+    path_files = os.listdir(gan_path)
+    if len(path_files) > 0:
+        for path_file in path_files:
+            os.remove(join(gan_path, path_file))
     #gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
     #gan_path = "/scratch/dgagne/random_gan_{0}".format("20170905")
     # gan_params = dict(generator_input_size=[16, 32, 128],
@@ -40,11 +46,12 @@ def main():
                       learning_rate=[0.001, 0.0001],
                       activation=["relu", "leaky"],
                       dropout_alpha=[0, 0.1, 0.5],
-                      use_dropout=[True, False],
+                      use_dropout=[True],
                       use_noise=[False],
                       beta_one=[0.5],
                       data_width=[32],
                       train_size=[131072],
+                      #train_size=[4096],
                       length_scale=["full;3", "full;8",
                                     "blended;3;8"],
                       stride=[1, 2],
@@ -129,16 +136,15 @@ def train_single_gan(gan_index, num_epochs, gan_params, metrics, gan_path):
                                   output_size=int(gan_params.loc[gan_index, "generator_input_size"]),
                                   activation=gan_params.loc[gan_index, "activation"],
                                   stride=int(gan_params.loc[gan_index, "stride"]),
-                                  output_activation=gan_params.loc[gan_index, "output_activation"],
                                   dropout_alpha=float(gan_params.loc[gan_index, "dropout_alpha"]))
     optimizer = Adam(lr=gan_params.loc[gan_index, "learning_rate"],
                      beta_1=gan_params.loc[gan_index, "beta_one"])
     gen_model.compile(optimizer=optimizer, loss="mse")
     ind_enc_model.compile(optimizer=optimizer, loss="mse")
-    disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-    ind_enc_model.compile(optimizer=optimizer, loss="mse", metrics=metrics)
+    disc_model.compile(optimizer=optimizer, loss="binary_crossentropy")
+    ind_enc_model.compile(optimizer=optimizer, loss="mse")
     gen_disc_model = stack_gen_disc(gen_model, disc_model)
-    gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
+    gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy")
     gen_enc_model = stack_gen_enc(gen_model, ind_enc_model)
     gen_enc_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
     print("gen model")
@@ -150,11 +156,11 @@ def train_single_gan(gan_index, num_epochs, gan_params, metrics, gan_path):
     print("enc gen model")
     print(gen_enc_model.summary())
     history = train_gan_quiet(data, gen_model, disc_model,
-                              gen_disc_model, gen_enc_model,
+                              ind_enc_model, gen_disc_model, gen_enc_model,
                               int(gan_params.loc[gan_index, "generator_input_size"]),
                               int(gan_params.loc[gan_index, "batch_size"]),
                               num_epochs, gan_index, gan_path)
-    history.to_csv(join(gan_path, "gan_history_{0:04d}.csv".format(gan_index)), index_label="Time")
+    history.to_csv(join(gan_path, "gan_history_{0:04d}.csv".format(gan_index)), index_label="Index")
     del data
 
 

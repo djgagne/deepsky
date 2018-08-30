@@ -324,7 +324,7 @@ def stack_gen_disc(generator, discriminator):
         Generator layers attached to discriminator layers.
     """
     discriminator.trainable = False
-    stacked_model = discriminator(generator)
+    stacked_model = discriminator(generator.output)
     model_obj = Model(generator.input, stacked_model)
     return model_obj
 
@@ -398,18 +398,22 @@ def predict_stochastic(neural_net):
     Returns:
 
     """
-    input = neural_net.input
+    input_layer = neural_net.input
     output = neural_net.output
-    pred_func = K.function(input + [K.learning_phase()], [output])
+    pred_func = K.function([input_layer, K.learning_phase()], [output])
     return pred_func
 
 
 def train_gan_quiet(all_train_data, generator, discriminator, encoder, gen_disc, gen_enc, vec_size,
-                    batch_size, num_epochs, gan_index, out_path, update_interval=10):
+                    batch_size, num_epochs, gan_index, out_path, update_interval=1):
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     batch_diff = all_train_data.shape[0] % batch_size
-    train_data = all_train_data[:-batch_diff]
+    if batch_diff > 0:
+        train_data = all_train_data[:-batch_diff]
+    else:
+        train_data = all_train_data
+    print(train_data.shape)
     train_order = np.arange(train_data.shape[0])
     batch_labels = np.zeros(batch_size, dtype=np.float32)
     batch_labels[:batch_half] = 1
@@ -417,32 +421,28 @@ def train_gan_quiet(all_train_data, generator, discriminator, encoder, gen_disc,
     batch_vec = np.zeros((batch_size, vec_size))
     gen_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]), dtype=np.float32)
-    disc_loss_history = []
-    gen_loss_history = []
-    time_history = []
-    current_epoch = []
-    current_batch = []
-    hist_cols = ["Epoch", "Batch", "Disc Loss", "Gen Loss"]
+    hist_cols = ["Time", "Epoch", "Batch", "Disc Loss", "Gen Loss"]
+    hist_dict = {h:[] for h in hist_cols}
     gen_pred_func = predict_stochastic(generator)
     for epoch in range(1, np.max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
-            time_history.append(pd.Timestamp("now"))
+            hist_dict["Time"].append(pd.Timestamp("now"))
             batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
             gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
             #combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
             combo_data_batch[batch_half:] = gen_pred_func([batch_vec[batch_half:], 1])[0]
-            current_epoch.append(epoch)
-            current_batch.append(b)
-            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
-            gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
+            hist_dict["Epoch"].append(epoch)
+            hist_dict["Batch"].append(b)
+            hist_dict["Disc Loss"].append(discriminator.train_on_batch(combo_data_batch, batch_labels))
+            hist_dict["Gen Loss"].append(gen_disc.train_on_batch(gen_batch_vec,
                                                             gen_labels))
             if b % update_interval == 0:
-                print("Combo: {0} Epoch: {1} Batch: {2} Disc: {3:0.3f} Gen: {4:0.3f}".format(gan_index,
-                                                                                             epoch, b,
-                                                                                             disc_loss_history[-1],
-                                                                                             gen_loss_history[-1]))
+                print("Combo: {0:04d} Epoch: {1:02d} Batch: {2:03d} Disc: {3:0.3f} Gen: {4:0.3f}".format(gan_index,
+                                                                                                         epoch, b,
+                                                                                                         hist_dict["Disc Loss"][-1],
+                                                                                                         hist_dict["Gen Loss"][-1]))
         if epoch in num_epochs:
             save_model(generator,
                        join(out_path, "gen_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, epoch)))
@@ -450,11 +450,10 @@ def train_gan_quiet(all_train_data, generator, discriminator, encoder, gen_disc,
                        join(out_path, "disc_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, epoch)))
     gen_inputs = np.random.normal(size=(train_data.shape[0], vec_size))
     print("Fit Encoder Combo: {0}".format(gan_index))
-    gen_enc.fit(gen_inputs, gen_inputs, epochs=num_epochs, verbose=2)
-    save_model(encoder, join(out_path, "enc_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, num_epochs)))
-    time_history_index = pd.DatetimeIndex(time_history)
-    history = pd.DataFrame(np.hstack([current_epoch, disc_loss_history,
-                                      gen_loss_history]),
+    gen_enc.fit(gen_inputs, gen_inputs, epochs=num_epochs[-1], batch_size=batch_size, verbose=2)
+    save_model(encoder, join(out_path, "enc_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, num_epochs[-1])))
+    time_history_index = pd.DatetimeIndex(hist_dict["Time"])
+    history = pd.DataFrame(hist_dict,
                            index=time_history_index, columns=hist_cols)
     return history
 
