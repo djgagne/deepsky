@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from deepsky.kriging import random_field_generator, spatial_covariance, distance_matrix, exp_kernel
-from deepsky.gan import generator_model, encoder_disc_model, train_linked_gan, stack_gen_disc, stack_gen_enc
+from deepsky.gan import generator_model, discriminator_model, train_linked_gan, stack_gen_disc, stack_gen_enc
 from deepsky.gan import normalize_multivariate_data, encoder_model
 import matplotlib.pyplot as plt
 import itertools as it
@@ -16,8 +16,9 @@ from datetime import datetime
 
 
 def main():
+    gan_path = "/glade/scratch/dgagne/random_gan/"
     #gan_path = "/scratch/dgagne/random_gan_{0}/".format(datetime.utcnow().strftime("%Y%m%d"))
-    gan_path = "/scratch/dgagne/random_gan_{0}".format("20170905")
+    #gan_path = "/scratch/dgagne/random_gan_{0}".format("20170905")
     # gan_params = dict(generator_input_size=[16, 32, 128],
     #                   filter_width=[3, 5],
     #                   min_data_width=[4],
@@ -40,7 +41,6 @@ def main():
                       batch_size=[256],
                       learning_rate=[0.0001],
                       activation=["relu", "selu", "leaky"],
-                      output_activation=["linear"],
                       dropout_alpha=[0, 0.05, 0.1],
                       beta_one=[0.5],
                       data_width=[32],
@@ -50,7 +50,7 @@ def main():
                       seed=[14268489],
                       )
     num_epochs = [1, 2, 3, 4, 5, 8, 10]
-    num_gpus = 8
+    num_gpus = 1
     out_dtype = "float32"
     metrics = ["accuracy", "binary_crossentropy"]
     if not exists(gan_path):
@@ -106,16 +106,16 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     # batch_seeds = np.random.randint(0, 1000000, size=batches_per_epoch)
     if batch_diff > 0:
         data = data[:data.shape[0]-batch_diff]
-    gen, vec_input = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
+    print("create gan models")
+    gen_model = generator_model(input_size=int(gan_params.loc[i, "generator_input_size"]),
                                      filter_width=int(gan_params.loc[i, "filter_width"]),
                                      min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                      min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
                                      output_size=data.shape[1:],
                                      stride=2,
                                      activation=gan_params.loc[i, "activation"],
-                                     output_activation=gan_params.loc[i, "output_activation"],
                                      dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-    disc, enc, image_input = encoder_disc_model(input_size=data.shape[1:],
+    disc_model = discriminator_model(input_size=data.shape[1:],
                                                 filter_width=int(gan_params.loc[i, "filter_width"]),
                                                 min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                                 min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
@@ -123,7 +123,7 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
                                                 activation=gan_params.loc[i, "activation"],
                                                 encoder_output_activation=gan_params.loc[i, "output_activation"],
                                                 dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
-    ind_enc, ind_enc_image_input = encoder_model(input_size=data.shape[1:],
+    ind_enc_model  = encoder_model(input_size=data.shape[1:],
                                                  filter_width=int(gan_params.loc[i, "filter_width"]),
                                                  min_data_width=int(gan_params.loc[i, "min_data_width"]),
                                                  min_conv_filters=int(gan_params.loc[i, "min_conv_filters"]),
@@ -133,17 +133,13 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
                                                  dropout_alpha=float(gan_params.loc[i, "dropout_alpha"]))
     optimizer = Adam(lr=gan_params.loc[i, "learning_rate"],
                      beta_1=gan_params.loc[i, "beta_one"])
-    gen_model = Model(vec_input, gen)
-    disc_model = Model(image_input, disc)
-    enc_model = Model(image_input, enc)
-    ind_enc_model = Model(ind_enc_image_input, ind_enc)
     gen_model.compile(optimizer=optimizer, loss="mse")
     enc_model.compile(optimizer=optimizer, loss="mse")
     disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
     ind_enc_model.compile(optimizer=optimizer, loss="mse", metrics=metrics)
     gen_disc_model = stack_gen_disc(gen_model, disc_model)
     gen_disc_model.compile(optimizer=optimizer, loss="binary_crossentropy", metrics=metrics)
-    gen_enc_model = stack_gen_enc(gen_model, enc_model, disc_model)
+    gen_enc_model = stack_gen_enc(gen_model, enc_model)
     gen_enc_model.compile(optimizer=optimizer, loss="mse", metrics=["mse", "mae"])
     print("gen model")
     print(gen_model.summary())
@@ -153,12 +149,11 @@ def train_single_gan(i, num_epochs, gan_params, metrics, gan_path, out_dtype):
     print(gen_disc_model.summary())
     print("enc gen model")
     print(gen_enc_model.summary())
-    train_linked_gan(data, gen_model, enc_model, disc_model,
+    train_gan_quiet(data, gen_model, disc_model,
                      gen_disc_model, gen_enc_model,
                      int(gan_params.loc[i, "generator_input_size"]),
-                     gan_path, i, batch_size=int(gan_params.loc[i, "batch_size"]),
-                     metrics=metrics, num_epochs=num_epochs, scaling_values=scaling_values,
-                     out_dtype=out_dtype, ind_encoder=ind_enc_model)
+                     int(gan_params.loc[i, "batch_size"]),
+                     num_epochs, i)
     del data
 
 
@@ -170,6 +165,7 @@ def generate_random_fields(set_size, data_width, length_scale_str):
     y = np.arange(data_width)
     x_grid, y_grid = np.meshgrid(x, y)
     rand_gen = random_field_generator(x_grid, y_grid, length_scales, spatial_pattern=spatial_pattern)
+    print("Generate stack of random fields")
     data = np.stack([next(rand_gen) for i in range(set_size)], axis=0)
     return data
 
