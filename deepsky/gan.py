@@ -1,8 +1,8 @@
 from __future__ import division
 import numpy as np
 import pandas as pd
-from keras.models import Sequential, Model
-from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, UpSampling2D, MaxPool2D
+from keras.models import Sequential, Model, save_model
+from keras.layers import Conv2D, Conv2DTranspose, Flatten, Dense, Input, UpSampling2D, MaxPool2D, BatchNormalization
 from keras.layers import Activation, Reshape, LeakyReLU, concatenate, Dropout, GaussianNoise, AveragePooling2D
 from keras.regularizers import l2
 import xarray as xr
@@ -13,7 +13,7 @@ import keras.backend as K
 def generator_model(input_size=100, filter_width=5, min_data_width=4,
                     min_conv_filters=64, output_size=(32, 32, 1), stride=2, activation="relu",
                     use_dropout=False, dropout_alpha=0,
-                    use_noise=False, noise_sd=0.1):
+                    use_noise=False, noise_sd=0.1, l2_reg=0.001):
     """
     Creates a generator convolutional neural network for a generative adversarial network set. The keyword arguments
     allow aspects of the structure of the generator to be tuned for optimal performance.
@@ -39,7 +39,8 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     max_conv_filters = int(min_conv_filters * 2 ** (num_layers))
     curr_conv_filters = max_conv_filters
     vector_input = Input(shape=(input_size, ), name="gen_input")
-    model = Dense(units=max_conv_filters * min_data_width * min_data_width, kernel_regularizer=l2(0.001))(vector_input)
+    model = Dense(units=max_conv_filters * min_data_width * min_data_width,
+                  kernel_regularizer=l2(l2_reg), use_bias=False)(vector_input)
     model = Reshape((min_data_width, min_data_width, max_conv_filters))(model)
     if activation == "leaky":
         model = LeakyReLU(alpha=0.2)(model)
@@ -48,7 +49,7 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
     for i in range(num_layers):
         curr_conv_filters //= 2
         model = Conv2DTranspose(curr_conv_filters, (filter_width, filter_width),
-                                strides=(stride, stride), padding="same", kernel_regularizer=l2())(model)
+                                strides=(stride, stride), padding="same", kernel_regularizer=l2(l2_reg))(model)
         if activation == "leaky":
             model = LeakyReLU(alpha=0.2)(model)
         else:
@@ -61,7 +62,8 @@ def generator_model(input_size=100, filter_width=5, min_data_width=4,
             model = UpSampling2D()(model)
     model = Conv2DTranspose(output_size[-1], (filter_width, filter_width),
                             strides=(1, 1),
-                            padding="same", kernel_regularizer=l2())(model)
+                            padding="same", kernel_regularizer=l2(l2_reg))(model)
+    model = BatchNormalization()(model)
     model_out = Model(vector_input, model)
     return model_out
 
@@ -119,7 +121,7 @@ def encoder_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
                        strides=(1, 1), padding="same", kernel_regularizer=l2())(model)
     model = Flatten()(model)
     model = Dense(output_size)(model)
-    model = Activation(output_activation)(model)
+    model = BatchNormalization()(model)
     model_out = Model(image_input, model)
     return model_out
 
@@ -182,7 +184,9 @@ def encoder_disc_model(input_size=(32, 32, 1), filter_width=5, min_data_width=4,
     enc_model = Activation(encoder_output_activation)(enc_model)
     disc_model = Dense(1)(model)
     disc_model = Activation("sigmoid")(disc_model)
-    return disc_model, enc_model, image_input
+    disc = Model(image_input, disc_model)
+    enc = Model(image_input, enc_model)
+    return disc, enc
 
 
 def discriminator_model(input_size=(32, 32, 1), stride=2, filter_width=5,
@@ -319,12 +323,9 @@ def stack_gen_disc(generator, discriminator):
     Returns:
         Generator layers attached to discriminator layers.
     """
-    model_obj = Sequential()
-    for layer in generator.layers:
-        model_obj.add(layer)
-    for layer in discriminator.layers:
-        layer.trainable = False
-        model_obj.add(layer)
+    discriminator.trainable = False
+    stacked_model = discriminator(generator.output)
+    model_obj = Model(generator.input, stacked_model)
     return model_obj
 
 
@@ -340,12 +341,9 @@ def stack_gen_enc(generator, encoder):
     Returns:
         Encoder layers attached to generator layers
     """
-    model_obj = Sequential()
-    for layer in generator.layers:
-        layer.trainable = False
-        model_obj.add(layer)
-    for layer in encoder.layers:
-        model_obj.add(layer)
+    generator.trainable = False
+    model = encoder(generator.output)
+    model_obj = Model(generator.input, model)
     return model_obj
 
 
@@ -388,46 +386,77 @@ def stack_encoder_gen_disc(encoder, generator, discriminator):
     return model
 
 
-def train_gan_quiet(all_train_data, generator, discriminator, gen_disc, gen_enc, vec_size,
-                    batch_size, num_epochs, gan_index):
+def predict_stochastic(neural_net):
+    """
+    Have the neural network make predictions with the Dropout layers on, resulting in stochastic behavior from the
+    neural net itself.
+
+    Args:
+        neural_net:
+        data:
+
+    Returns:
+
+    """
+    input_layer = neural_net.input
+    output = neural_net.output
+    pred_func = K.function([input_layer, K.learning_phase()], [output])
+    return pred_func
+
+
+def train_gan_quiet(all_train_data, generator, discriminator, encoder, gen_disc, gen_enc, vec_size,
+                    batch_size, num_epochs, gan_index, out_path, update_interval=1):
     batch_size = int(batch_size)
     batch_half = int(batch_size // 2)
     batch_diff = all_train_data.shape[0] % batch_size
-    train_data = all_train_data[:-batch_diff]
+    if batch_diff > 0:
+        train_data = all_train_data[:-batch_diff]
+    else:
+        train_data = all_train_data
+    print(train_data.shape)
     train_order = np.arange(train_data.shape[0])
     batch_labels = np.zeros(batch_size, dtype=np.float32)
     batch_labels[:batch_half] = 1
     gen_labels = np.ones(batch_size, dtype=np.float32)
     batch_vec = np.zeros((batch_size, vec_size))
     gen_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
-    enc_batch_vec = np.zeros((batch_size, vec_size), dtype=train_data.dtype)
     combo_data_batch = np.zeros(np.concatenate([[batch_size], train_data.shape[1:]]), dtype=np.float32)
-    disc_loss_history = []
-    gen_loss_history = []
-    for epoch in range(1, num_epochs + 1):
+    hist_cols = ["Time", "Epoch", "Batch", "Disc Loss", "Gen Loss"]
+    hist_dict = {h:[] for h in hist_cols}
+    gen_pred_func = predict_stochastic(generator)
+    for epoch in range(1, np.max(num_epochs) + 1):
         np.random.shuffle(train_order)
         for b, b_index in enumerate(np.arange(batch_half, train_data.shape[0] + batch_half, batch_half)):
+            hist_dict["Time"].append(pd.Timestamp("now"))
             batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
             gen_batch_vec[:] = np.random.normal(size=(batch_size, vec_size))
             combo_data_batch[:batch_half] = train_data[train_order[b_index - batch_half: b_index]]
-            combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
-            disc_loss_history.append(discriminator.train_on_batch(combo_data_batch, batch_labels))
-            disc_preds = discriminator.predict_on_batch(combo_data_batch)
-           # print("Disc Combo: {0} Max: {1}, Min {2}, LMax: {3}, LMin: {4}".format(gan_index, disc_preds.max(), disc_preds.min(), batch_labels.max(), batch_labels.min()))
-            if b % 10 == 0:
-                print("Disc Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index,
-                                                                                epoch, b,
-                                                                                disc_loss_history[-1]))
-            gen_loss_history.append(gen_disc.train_on_batch(gen_batch_vec,
+            #combo_data_batch[batch_half:] = generator.predict_on_batch(batch_vec[batch_half:])
+            combo_data_batch[batch_half:] = gen_pred_func([batch_vec[batch_half:], 1])[0]
+            hist_dict["Epoch"].append(epoch)
+            hist_dict["Batch"].append(b)
+            hist_dict["Disc Loss"].append(discriminator.train_on_batch(combo_data_batch, batch_labels))
+            hist_dict["Gen Loss"].append(gen_disc.train_on_batch(gen_batch_vec,
                                                             gen_labels))
-            if b % 10 == 0:
-                print("Gen Combo: {0} Epoch: {1} Batch: {2} Loss: {3:0.5f}".format(gan_index,
-                                                                               epoch, b,
-                                                                               gen_loss_history[-1]))
-    
+            if b % update_interval == 0:
+                print("Combo: {0:04d} Epoch: {1:02d} Batch: {2:03d} Disc: {3:0.3f} Gen: {4:0.3f}".format(gan_index,
+                                                                                                         epoch, b,
+                                                                                                         hist_dict["Disc Loss"][-1],
+                                                                                                         hist_dict["Gen Loss"][-1]))
+        if epoch in num_epochs:
+            save_model(generator,
+                       join(out_path, "gen_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, epoch)))
+            save_model(discriminator,
+                       join(out_path, "disc_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, epoch)))
     gen_inputs = np.random.normal(size=(train_data.shape[0], vec_size))
     print("Fit Encoder Combo: {0}".format(gan_index))
-    gen_enc.fit(gen_inputs, gen_inputs, epochs=num_epochs, verbose=2)
+    gen_enc.fit(gen_inputs, gen_inputs, epochs=num_epochs[-1], batch_size=batch_size, verbose=2)
+    save_model(encoder, join(out_path, "enc_model_index_{0:04d}_epoch_{1:02d}.h5".format(gan_index, num_epochs[-1])))
+    time_history_index = pd.DatetimeIndex(hist_dict["Time"])
+    history = pd.DataFrame(hist_dict,
+                           index=time_history_index, columns=hist_cols)
+    return history
+
 
 
 def train_linked_gan(train_data, generator, encoder, discriminator, gen_disc, gen_enc, vec_size, gan_path, gan_index,
