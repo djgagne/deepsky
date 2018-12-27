@@ -14,7 +14,9 @@ from keras.optimizers import Adam
 
 
 def main():
-    gan_path = "/glade/scratch/dgagne/random_gan/"
+    
+    #gan_path = "/glade/scratch/dgagne/random_gan/"
+    gan_path = "/orangefs/scratch/dgagne/random_gan/"
     if not exists(gan_path):
         os.mkdir(gan_path)
     path_files = os.listdir(gan_path)
