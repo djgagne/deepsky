@@ -58,5 +58,7 @@ The analysis for the paper can be found in Jupyter notebooks in the notebooks di
 1. `ThompsonHail.ipynb`: Used to generate Figure 1
 2. `radar_hail_cnn.ipynb`: Used to generate Figure 2
 3. `spatial_hail_feature_importance.ipynb`: Plotting feature importances for each model. 
-5. `Hail_Conv_Net_Filter_Activations.ipynb`: Used to generate Figures 11-13.
+4. `SpatialHailInterp.ipynb`: Verification and plotting of ideal hailstorms from Conv. Net.
+5. `Logistic_PCA_Interp.ipynb`: Plot of ideal hailstorms from Logistic Mean and Logistic PCA models.
+6. `Hail_Conv_Net_Filter_Activations.ipynb`: Used to generate Figures 11-13.
 
